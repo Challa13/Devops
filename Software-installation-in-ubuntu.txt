@@ -1,0 +1,114 @@
+
+=========================================================================
+Software Installation in Ubuntu
+========================================================================
+Krishna@Krishna:~$ sudo fdisk -l /dev/sda
+Disk /dev/sda: 30 GiB, 32213303296 bytes, 62916608 sectors
+Disk model: Virtual Disk
+Units: sectors of 1 * 512 = 512 bytes
+Sector size (logical/physical): 512 bytes / 4096 bytes
+I/O size (minimum/optimal): 4096 bytes / 4096 bytes
+Disklabel type: gpt
+Disk identifier: 2A9CC22C-5FF2-466B-95DC-20CB6D0F3B73
+
+Device      Start      End  Sectors  Size Type
+/dev/sda1  227328 62916574 62689247 29.9G Linux filesystem
+/dev/sda14   2048    10239     8192    4M BIOS boot
+/dev/sda15  10240   227327   217088  106M EFI System
+
+Partition table entries are not in disk order.
+Krishna@Krishna:~$ sudo fdisk -l /dev/sdc
+Disk /dev/sdc: 32 GiB, 34359738368 bytes, 67108864 sectors
+Disk model: Virtual Disk
+Units: sectors of 1 * 512 = 512 bytes
+Sector size (logical/physical): 512 bytes / 4096 bytes
+I/O size (minimum/optimal): 4096 bytes / 4096 bytes
+Krishna@Krishna:~$ sudo fdisk /dev/sdc
+
+Welcome to fdisk (util-linux 2.34).
+Changes will remain in memory only, until you decide to write them.
+Be careful before using the write command.
+
+Device does not contain a recognized partition table.
+Created a new DOS disklabel with disk identifier 0xc53a36ba.
+
+Command (m for help): n
+Partition type
+   p   primary (0 primary, 0 extended, 4 free)
+   e   extended (container for logical partitions)
+Select (default p): p
+Partition number (1-4, default 1): 1
+First sector (2048-67108863, default 2048): 6710886
+Last sector, +/-sectors or +/-size{K,M,G,T,P} (6710886-67108863, default 67108863): +M
+Last sector, +/-sectors or +/-size{K,M,G,T,P} (6710886-67108863, default 67108863):
+
+Created a new partition 1 of type 'Linux' and of size 28.8 GiB.
+
+Command (m for help): w
+The partition table has been altered.
+Calling ioctl() to re-read partition table.
+Syncing disks.
+============================================================================================
+mkfs.ext4 /dev/sdc
+sudo mkfs.ext4 /dev/sdc
+df -h
+lsblk
+sudo mount /dev/sdc /home/Krishna
+df -h
+============================================================================================
+java -version
+sudo apt install default-jre
+java -version
+sudo apt install openjdk-8-jdk-headless
+javac -version
+===============================================================
+sudo apt install git
+git --version
+================================================================
+sudo wget https://downloads.apache.org/maven/maven-3/3.9.4/binaries/apache-maven-3.9.4-bin.tar.gz -P /home/Krishna
+cd /home/Krishna/
+ls
+tar -xvzf apache-maven-3.6.3-bin.tar.gz
+tar -xvzf apache-maven-3.9.4-bin.tar.gz
+sudo tar -xvzf apache-maven-3.9.4-bin.tar.gz
+sudo cp -r apache-maven-3.9.4 /opt/maven
+sudo nano /etc/profile.d/maven.sh
+sudo vi /etc/profile.d/maven.sh
+------------------------------
+export JAVA_HOME=/usr/lib/jvm/default-java
+export M2_HOME=/opt/maven
+export MAVEN_HOME=/opt/maven
+export PATH=${M2_HOME}/bin:${PATH}
+---------------------------------
+sudo chmod +x /etc/profile.d/maven.sh
+source /etc/profile.d/maven.sh
+mvn -version
+=========================================================================
+sudo curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+sudo chmod 700 get_helm.sh
+sudo ./get_helm.sh
+helm version
+=========================================================================
+sudo apt install apt-transport
+curl -fsSL ubuntu/gpg | sudo apt-key add -
+sudo apt-get update
+sudo apt install docker.io
+docker --version
+------------------------------------------------
+sudo apt-get update
+sudo apt-get install ca-certificates curl gnupg
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+sudo chmod a+r /etc/apt/keyrings/docker.gpg
+echo   "deb [arch="$(dpkg --print-architecture)" signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+/etc/os-release && echo "$VERSION_CODENAME")" stable" |   sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+sudo apt-get update
+sudo apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+docker --version
+===========================================================================
+curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+chmod +x kubectl
+sudo mv kubectl /usr/local/bin
+sudo kubectl
+sudo kubectl version
+======================================================================================
