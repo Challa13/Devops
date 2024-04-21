@@ -1,0 +1,22 @@
+TO INSTALL NEXUS REPOSITORY IN RHEL
+=====================================
+sudo yum upgrade -y
+sudo yum install java-1.8.0-openjdk
+java -version
+cd /opt
+ll
+sudo yum install wget -y
+sudo wget -O latest-unix.tar.gz https://download.sonatype.com/nexus/3/latest-unix.tar.gz
+sudo tar -xzvf latest-unix.tar.gz
+sudo mv nexus-3* nexus
+useradd --system --no-create-home nexus
+chown -R  nexus:nexus /opt/nexus
+chown -R  nexus:nexus /opt/sonatype-work/
+cd nexus/
+cd bin
+vi nexus.rc
+run_as_user="nexus" (edit above file)
+chmod 777 nexus.rc
+sudo systemctl daemon-reload
+./nexus status
+./nexus start
