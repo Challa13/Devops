@@ -18,5 +18,9 @@ vi nexus.rc
 run_as_user="nexus" (edit above file)
 chmod 777 nexus.rc
 sudo systemctl daemon-reload
-./nexus status
 ./nexus start
+./nexus status
+
+======================================
+Enable port 8081 in security group
+
