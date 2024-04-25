@@ -1,0 +1,24 @@
+sudo cat /etc/kubernetes/manifests/kube-apiserver.yaml | less
+
+sudo kubectl get node --kubeconfig /etc/kubernetes/admin.conf
+
+sudo vim /etc/kubernetes/admin.conf
+
+------------------------------
+which kubectl
+
+ubuntu@ip-172-31-83-221:~$ which kubectl
+/usr/bin/kubectl
+ubuntu@ip-172-31-83-221:~$ sudo rm -f /usr/bin/kubect
+
+sudo rm -f /usr/bin/kubectl
+sudo rm -f /usr/bin/kubeadm
+sudo rm -f /usr/bin/kubelet
+------------------------
+
+Below commands are useful to uiinstall  k8S
+-----------------------------------------------
+kubeadm reset
+sudo apt-get purge kubeadm kubectl kubelet   
+sudo apt-get autoremove  
+sudo rm -rf ~/.kube
