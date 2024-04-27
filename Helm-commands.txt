@@ -1,0 +1,40 @@
+Helm Installtion
+------------------------
+$ curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 (download the helm )
+$ chmod 700 get_helm.sh ( provide the permissions)
+$ ./get_helm.sh (run the helm )
+
+--> Helm directly interacts with kube-api server.
+--> Kube-api server manages the whole K8S cluster
+
+
+Helm is a package manager for kubernetes it is easy to install the softwares and application deployments with in seconds
+
+To install helm chart using helm command
+-----------------------------------------
+$helm install myapplication application (myapplication is release name and application is chartname)
+
+$helm install myapplication application -f aplication application/values-applications.yaml --debug --no-hooks(application/values-applications.yaml application is directory and values-applications.yaml is data file)
+
+To uninstall
+---------------
+$helm uninstall myapplication
+
+To list the deployed helm charts
+---------------------------------
+$helm list -a
+
+To Upgrade helm chart
+-----------------------------
+$helm upgrade myapplication application -f aplication application/values-applications.yaml --debug --no-hooks
+
+
+Helm structure
+-----------------------
+                                                                             application (helm chart)
+                          ----------------------------------------------------------------------------------------------------------------------------------------------------------------
+                         |              |                                 |                                                   |                              |                        |
+                        values.yaml    values-applications.yaml         charts                                            templates                     chart.yaml
+    (Contains Environment details)     (Contains application )    (individual microservices folders)             (like svc,cm,deployment,ing)         (version)
+
+     
