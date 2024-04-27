@@ -11,6 +11,28 @@ To get all images from one project (In openshift we call projects in kubernetes 
 ==================================================================================================
 First we need to login the project using oc login
 
+Project
+---------
+$oc get projects
+oc project projectname
+
+to delete all configuration in project
+-----------------------------------------
+oc delete all --all
+
+To delete all configmaps in project
+-----------------------------------
+oc delete cm --all
+
+To delete all deployment in project
+----------------------------------------
+oc delete deployment --all
+
+To delete all routes in project
+------------------------------------
+oc delete routes --all
+
+
 oc describe dc | grep Image (for deploymentConfig)
 
 oc describe deployment | grep Image  (for deployment)
