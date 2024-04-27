@@ -37,4 +37,9 @@ Helm structure
                         values.yaml    values-applications.yaml         charts                                            templates                     chart.yaml
     (Contains Environment details)     (Contains application )    (individual microservices folders)             (like svc,cm,deployment,ing)         (version)
 
+
+svc-service
+cm-config map
+ing - ingress
+
      
