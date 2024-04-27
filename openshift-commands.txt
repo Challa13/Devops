@@ -1,1 +1,18 @@
 
+Connecting from server to openshift "oc cli" is required to install then only we can communicate to openshift
+
+To login openshift
+============================
+oc login
+
+oc logout
+
+To get all images from one project (In openshift we call projects in kubernetes it is namespace)
+==================================================================================================
+First we need to login the project using oc login
+
+oc describe dc | grep Image (for deploymentConfig)
+
+oc describe deployment | grep Image  (for deployment)
+
+
