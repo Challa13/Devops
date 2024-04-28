@@ -37,4 +37,28 @@ oc describe dc | grep Image (for deploymentConfig)
 
 oc describe deployment | grep Image  (for deployment)
 
+Deleleting completed pod from cli
+----------------------------------
+oc delete pod --field-selector=status.phase==Succeeded
+
+oc delete pod --all --force --grace-period=0
+
+
+Getting pods with node
+------------------------
+
+oc get pods -o wide
+
+oc get pods -o wide --show-labels
+
+TO get Clusterversion
+-----------------------------
+oc get clusterversion
+
+to copy data from pod to server
+----------------------------------
+oc rsync pod-name:/foldername serverpath(opt/admin)
+
+
+
 
