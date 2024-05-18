@@ -1,1 +1,42 @@
+To get pods
+--------------
+Kubectl get pods -n namespace
+
+To monitor pods
+------------------
+Kubectl top pods -n namespace
+
+To connect pod terminal
+------------------------
+kubectl exec -it pod /bin/sh -n namespace
+
+To get pod logs
+----------------------
+kubectl logs -f pod -n namespace
+
+To Scaleup pod
+----------------------
+kubectl scale deployment name --replica=1 -n namespace
+
+To Scale down pod
+---------------------------
+kubectl scale deployment name --replica=0 -n namespace
+
+To delete or restart pod
+---------------------------
+kubectl delete pod podname
+
+To decode the value in secret
+----------------------------------
+echo secretkey | base64 --decode
+
+For Loop to restart the all services
+------------------------------------------
+for x in $(kubectl get pods -n namespace | awk '{print $1}' );
+do
+kubectl delete pods $x -n ns;
+done
+
+We can also exclude the few services to restart using shell commands
+
 
