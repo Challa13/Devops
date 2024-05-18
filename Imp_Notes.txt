@@ -2,7 +2,7 @@
 (i)To Download the jar/War/ear/oar from pod/container
 ----------------------------------------------------
 Steps: this possible only you copying the resource while building the docker image
----------
+-----------------------------------------------------------------------------------
 1.First add the mount path to specific service
 2.Connect to the pod terminal
 3.Identify the path where the resources in pod
@@ -40,9 +40,27 @@ Steps: this possible only you copying the resource while building the docker ima
 3.pod will use the resources of worker nodes cpu and memory
 
 ---------------------------------------------------------------
-(Vi) Init container error
+(vi) Init container error
 ---------------------------------------------------------------
 1.First check the image is avilable or not
 2.Check the back end sevices are connecting or not
 
+---------------------------------------------------------------------
+(vii) Crashloopbackoff  error
+----------------------------------------------------------------------
+Above error contains multiple issues
+
+1.Check the property fetching with microservice
+2.Any property(keys) missing
+3.DB Connection
+4.Backend Services Conectivity
+
+-----------------------------------------------------------------------
+(viii) Logger Modes
+-----------------------------------------------------------------------
+1.We can change the logger modes in config maps or Property files
+2.Logger Mode types:
+       --> INFO
+       --> DEBUG
+       --> ERROR
 
