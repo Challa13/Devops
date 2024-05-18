@@ -3,6 +3,9 @@ svc-service
 cm-config map
 ing - ingress
 ==============================================================
+To creat
+
+
 
 To get pods
 --------------
