@@ -3,10 +3,12 @@ svc-service
 cm-config map
 ing - ingress
 ==============================================================
-To creat
-
-
-
+To create a complete pod we need four yamls
+--> config.yaml
+--> deployment.yaml
+--> service.yaml
+--> ingress.yaml
+------------------------------------------------------
 To get pods
 --------------
 Kubectl get pods -n namespace
