@@ -1,0 +1,48 @@
+---------------------------------------------------
+(i)To Download the jar/War/ear/oar from pod/container
+----------------------------------------------------
+Steps: this possible only you copying the resource while building the docker image
+---------
+1.First add the mount path to specific service
+2.Connect to the pod terminal
+3.Identify the path where the resources in pod
+4.copy the resources from pod terminal to mountpath
+5.Login to mountpath server and download the copied resource
+
+-------------------------------------------------------
+(ii)  Imagepullbackoff error
+-------------------------------------------------------
+1.Check the image name is correct ot not (spelling  mistakes)
+2.Check the version is proper or not
+3.Check the secret in deploy mail
+4.Check the image is available in repository or not
+
+----------------------------------------------------------
+(iii) OOMKilled Out of Memory
+----------------------------------------------------------
+1.Check the given limits to pods
+2.Pod is trying to access morethan limits it will goes to OOMKilled
+3.Remove the limits( CPU and Memory)
+
+--------------------------------------------------------------
+(iv)createcontainerconfigerror
+--------------------------------------------------------------
+1.Missing the keys(Environmental Variables)
+2.Some keys are present in cm and not in deployment
+3.Some keys are present in secrets and not in deployment
+4.Check the spellings in cm and deploy yamls
+
+-----------------------------------------------------------
+(V) Node is not available
+------------------------------------------------------------
+1.First check the node is available or not
+2.Every pod is use the worker nodes connected with master node(cluster)
+3.pod will use the resources of worker nodes cpu and memory
+
+---------------------------------------------------------------
+(Vi) Init container error
+---------------------------------------------------------------
+1.First check the image is avilable or not
+2.Check the back end sevices are connecting or not
+
+
