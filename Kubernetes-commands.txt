@@ -1,3 +1,9 @@
+==============================================================
+svc-service
+cm-config map
+ing - ingress
+==============================================================
+
 To get pods
 --------------
 Kubectl get pods -n namespace
@@ -38,6 +44,11 @@ kubectl delete pods $x -n ns;
 done
 
 We can also exclude the few services to restart using shell commands
+---------------------------------------------------------
+for x in $(kubectl get pods -n namespace | awk '{print $1}' | grep -v challa-3gtdh);
+do
+kubectl delete pods $x -n ns;
+done
 
 =========================================
 
@@ -76,8 +87,3 @@ kubectl delete ing --all
 To delete particular ing
 ------------------------------------
 kubectl delete ing challa-ing --all
-
-
-
-
-
