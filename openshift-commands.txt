@@ -59,6 +59,14 @@ to copy data from pod to server
 ----------------------------------
 oc rsync pod-name:/foldername serverpath(opt/admin)
 
+To Scaleup pod
+----------------------
+oc scale dc name --replica=1
+
+To Scale down pod
+---------------------------
+oc scale dc name --replica=0
+
 
 
 
