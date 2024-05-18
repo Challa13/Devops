@@ -39,4 +39,45 @@ done
 
 We can also exclude the few services to restart using shell commands
 
+=========================================
+
+To delete everything in cluster
+---------------------------------
+kubectl delete all --all
+
+To delete cm
+------------------
+kubectl delete cm challa-config -n namespace
+
+To delete all cm
+----------------------------
+kubectl delete cm --all
+
+To delete all deployment
+-------------------------------
+kubectl delete deployment --all
+
+To delete particular deployment
+------------------------------------
+kubectl delete deployment challa-deployment --all
+
+To delete all service
+-------------------------------
+kubectl delete svc --all
+
+To delete particular service
+------------------------------------
+kubectl delete svc challa-service --all
+
+To delete all ing
+-------------------------------
+kubectl delete ing --all
+
+To delete particular ing
+------------------------------------
+kubectl delete ing challa-ing --all
+
+
+
+
 
