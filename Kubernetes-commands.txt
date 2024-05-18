@@ -1,7 +1,11 @@
 ==============================================================
+shortcuts
+==============================================================
+ns-namespace
 svc-service
 cm-config map
 ing - ingress
+deploy-deployment
 ==============================================================
 To create a complete pod we need four yamls
 --> config.yaml
