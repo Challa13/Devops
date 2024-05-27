@@ -63,4 +63,68 @@ Above error contains multiple issues
        --> INFO
        --> DEBUG
        --> ERROR
+-----------------------------------------------------------------------------
+
+===============================================================================
+Need to learn these topics for k8s (these below details need to know before creating the eks cluster (source aws)
+================================================================================
+PodTemplates
+Pods
+ReplicaSets
+Deployments
+StatefulSets
+DaemonSets
+Jobs
+CronJobs
+PriorityClasses
+HorizontalPodAutoscalers
+------------------------------
+Cluster
+Nodes
+Namespaces
+APIServices
+Leases
+RuntimeClasses
+FlowSchemas
+PriorityLevelConfigurations
+-------------------------------------
+Service and networking
+Services
+Endpoints
+EndpointSlices
+Ingresses
+IngressClasses
+----------------------------------------
+Config and secrets
+ConfigMaps
+Secrets
+-----------------------------------------
+Storage
+PersistentVolumeClaims
+PersistentVolumes
+StorageClasses
+VolumeAttachment
+CSIDrivers
+CSINodes
+CSIStorageCapacities
+------------------------------------------
+Authentication
+ServiceAccounts
+-------------------------------------------
+Authorization
+ClusterRoles
+ClusterRoleBindings
+Roles
+RoleBindings
+-----------------------------------------------
+Policy
+LimitRanges
+ResourceQuotas
+NetworkPolicies
+PodDisruptionBudgets
+Extensions
+----------------------------------------------
+CustomResourceDefinitions
+MutatingWebhookConfigurations
+ValidatingWebhookConfigurations
 
