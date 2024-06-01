@@ -96,3 +96,10 @@ kubectl delete ing --all
 To delete particular ing
 ------------------------------------
 kubectl delete ing challa-ing --all
+
+=============================================================================
+Grafana Installation  in  Kubernetes
+=============================================================================
+
+https://grafana.com/docs/grafana/latest/setup-grafana/installation/kubernetes/?src=grafana_footer
+
