@@ -13,6 +13,15 @@ To create a complete pod we need four yamls
 --> service.yaml
 --> ingress.yaml
 ------------------------------------------------------
+
+To get which ns
+---------------
+kubectl config view --minify | grep namespace:
+
+To change the namespace
+------------------------
+kubectl config set-context --current --namespace=challa
+
 To get pods
 --------------
 Kubectl get pods -n namespace
@@ -109,4 +118,16 @@ label info
 
 kubectl get pods --show-labels -w
 
+-----------------
+Adding Label
+---------------
 kubectl label pod krishna env=develop
+
+------------------
+Json Kubectl commands
+---------------------
+kubectl get pods -o=jsonpath="{range.items[*]}{.metadata.name}{'\t'}{.status.startTime}{'\n'}{end}"
+kubectl get pods -o=jsonpath="{range.items[*]}{.metadata.name}{'\t'}{.status.phase}{'\n'}{end}"
+kubectl get pods -o=jsonpath="{range.items[*]}{.metadata.name}{'\t'}{.status.podIP}{'\n'}{end}"
+
+
