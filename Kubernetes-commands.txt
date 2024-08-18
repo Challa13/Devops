@@ -103,3 +103,10 @@ Grafana Installation  in  Kubernetes
 
 https://grafana.com/docs/grafana/latest/setup-grafana/installation/kubernetes/?src=grafana_footer
 
+----------------
+label info
+-------------------
+
+kubectl get pods --show-labels -w
+
+kubectl label pod krishna env=develop
