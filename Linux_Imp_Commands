@@ -1,0 +1,5 @@
+To search and replace the key in whole folder
+
+sed command example:
+
+sed -i 's/challa/challa123/g' *.txt
