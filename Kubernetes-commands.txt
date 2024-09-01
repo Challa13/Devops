@@ -130,4 +130,10 @@ kubectl get pods -o=jsonpath="{range.items[*]}{.metadata.name}{'\t'}{.status.sta
 kubectl get pods -o=jsonpath="{range.items[*]}{.metadata.name}{'\t'}{.status.phase}{'\n'}{end}"
 kubectl get pods -o=jsonpath="{range.items[*]}{.metadata.name}{'\t'}{.status.podIP}{'\n'}{end}"
 
+Switching to context
+--------------------
+kubectl config current context
+kubectl config use-context challa-context
+kubectl config get-contexts
+
 
