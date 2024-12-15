@@ -11,7 +11,7 @@ To get all images from one project (In openshift we call projects in kubernetes 
 ==================================================================================================
 First we need to login the project using oc login
 
-oc login https://webapps.cl33.challa.com:6443 -u challa -p challa@12345
+example: oc login https://webapps.cl33.challa.com:6443 -u challa -p challa@12345
 
 Project
 ---------
