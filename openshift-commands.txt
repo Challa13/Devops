@@ -74,3 +74,7 @@ oc top pods
 To Monitor the nodes
 ------------------------
 oc top nodes 
+
+To get resource limits of deployment
+--------------------------------------
+oc get deploy -o=custom-columns=NAME:.metadata.name,LIMITS:.spec.template.spec.containers[*].resources.limits
