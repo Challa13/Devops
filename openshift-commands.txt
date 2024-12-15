@@ -11,6 +11,8 @@ To get all images from one project (In openshift we call projects in kubernetes 
 ==================================================================================================
 First we need to login the project using oc login
 
+oc login https://webapps.cl33.challa.com:6443 -u challa -p challa@12345
+
 Project
 ---------
 $oc get projects
@@ -78,3 +80,11 @@ oc top nodes
 To get resource limits of deployment
 --------------------------------------
 oc get deploy -o=custom-columns=NAME:.metadata.name,LIMITS:.spec.template.spec.containers[*].resources.limits
+
+To scale down all  the pods using a single command
+-----------------------------------------------------
+oc scale deploy --all --replicas=0
+
+To scale up all  the pods using a single command
+-----------------------------------------------------
+oc scale deploy --all --replicas=1
