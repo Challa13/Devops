@@ -136,4 +136,10 @@ kubectl config current context
 kubectl config use-context challa-context
 kubectl config get-contexts
 
+Copy the data from  inside the pod
+-------------------------------------
+kubectl cp krishna-app-234dfgvfd-y65ft:/Data ./newdata
+
+krishna-app-234dfgvfd-y65ft is pod name | /Data is folder inside the pod | ./newdata is destination for copied the data
+
 
