@@ -1,0 +1,16 @@
+Ansible_installation in ubuntu
+
+Update Package Lists:
+sudo apt update
+
+Install software-properties-common:
+sudo apt install software-properties-common
+
+Add Ansible PPA Repository:
+sudo add-apt-repository --yes --update ppa:ansible/ansible
+
+Install Ansible:
+sudo apt install ansible
+
+Verify Installation:
+ansible --version
