@@ -24,7 +24,7 @@ jobs:
 
     steps:
 
-      # 📥 Checkout repo
+      # 📥 Checkout Repository
       - name: Checkout Repository
         uses: actions/checkout@v4
 
@@ -36,14 +36,14 @@ jobs:
             exit 1
           fi
 
-      # 🔐 Configure AWS credentials via OIDC
+      # 🔐 Configure AWS Credentials (OIDC)
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ env.ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # 🔎 Verify DEV instances exist
+      # 🔎 Validate DEV Instances Exist
       - name: Check DEV Instances
         run: |
           INSTANCES=$(aws ec2 describe-instances \
@@ -58,7 +58,7 @@ jobs:
 
           echo "Found DEV instances: $INSTANCES"
 
-      # 🚀 Run script and store output directly in S3
+      # 🚀 Execute Script via SSM (Output to S3)
       - name: Execute server_info.sh via SSM
         run: |
           if [ ! -f scripts/server_info.sh ]; then
@@ -78,21 +78,30 @@ jobs:
 
           echo "Command ID: $COMMAND_ID"
 
-          echo "Waiting for command to complete..."
+          echo "Waiting for command completion..."
 
-          # Get first instance for waiter
-          FIRST_INSTANCE=$(aws ec2 describe-instances \
-            --filters "Name=tag:Environment,Values=dev" \
-            --query "Reservations[0].Instances[0].InstanceId" \
-            --output text)
+          # SAFE polling (not instance-based)
+          while true; do
+            STATUS=$(aws ssm list-commands \
+              --command-id $COMMAND_ID \
+              --query "Commands[0].Status" \
+              --output text)
 
-          aws ssm wait command-executed \
-            --command-id $COMMAND_ID \
-            --instance-id $FIRST_INSTANCE
+            echo "Current status: $STATUS"
 
-          echo "Command execution completed."
+            if [[ "$STATUS" == "Success" ]]; then
+              break
+            elif [[ "$STATUS" == "Failed" || "$STATUS" == "Cancelled" || "$STATUS" == "TimedOut" ]]; then
+              echo "Command failed with status: $STATUS"
+              exit 1
+            fi
 
-      # 📦 Show S3 location
+            sleep 5
+          done
+
+          echo "Command execution completed successfully."
+
+      # 📦 Print S3 Output Location
       - name: Print S3 Output Location
         run: |
           echo "SSM output stored in:"
