@@ -20,36 +20,42 @@ on:
         default: "true"
 
   schedule:
-    - cron: "0 2 * * *"   # Daily 2 AM UTC
+    - cron: "0 2 * * *"
 
 permissions:
   id-token: write
   contents: read
+
+env:
+  AWS_REGION: ap-south-1
 
 jobs:
   ssm-run:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       # ✅ OIDC Authentication
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::034362042633:role/github-role11
-          aws-region: ap-south-1
+          role-to-assume: arn:aws:iam::<ACCOUNT_ID>:role/github-oidc-dev-role
+          aws-region: ${{ env.AWS_REGION }}
 
-      # ✅ Dev-only Guardrail
-      - name: Validate dev guardrail
+      # ✅ Smart Dev Guardrail
+      - name: Validate Dev Target
         run: |
-          if [[ "${{ github.ref }}" != "refs/heads/dev" ]]; then
-            echo "❌ This workflow can only run from dev branch"
+          TAG_VALUE="${{ github.event.inputs.tag_value || 'dev' }}"
+
+          if [[ "$TAG_VALUE" != "dev" ]]; then
+            echo "❌ Only dev environment is allowed."
             exit 1
           fi
 
-      # ✅ Resolve target instances
+          echo "✅ Dev guardrail passed"
+
+      # ✅ Resolve Instances
       - name: Get EC2 Instance IDs
         id: get_instances
         run: |
@@ -63,17 +69,16 @@ jobs:
               --output text)
           fi
 
-          echo "Instances: $INSTANCE_IDS"
-
           if [[ -z "$INSTANCE_IDS" ]]; then
             echo "❌ No running dev instances found"
             exit 1
           fi
 
+          echo "Resolved Instances: $INSTANCE_IDS"
           echo "instance_ids=$INSTANCE_IDS" >> $GITHUB_OUTPUT
 
-      # ✅ Dry Run Safety
-      - name: Dry Run Check
+      # ✅ Dry Run
+      - name: Dry Run
         if: ${{ github.event.inputs.dry_run == 'true' }}
         run: |
           echo "🚦 DRY RUN ENABLED"
@@ -94,11 +99,16 @@ jobs:
           echo "Command ID: $COMMAND_ID"
           echo "command_id=$COMMAND_ID" >> $GITHUB_OUTPUT
 
-      # ✅ Wait & Collect Output
+      # ✅ Wait for Completion
+      - name: Wait for command
+        run: |
+          aws ssm wait command-executed \
+            --command-id ${{ steps.send_command.outputs.command_id }} \
+            --instance-id $(echo ${{ steps.get_instances.outputs.instance_ids }} | awk '{print $1}')
+
+      # ✅ Fetch Output
       - name: Fetch SSM Output
         run: |
-          sleep 10
-
           for INSTANCE in ${{ steps.get_instances.outputs.instance_ids }}
           do
             aws ssm get-command-invocation \
@@ -107,7 +117,7 @@ jobs:
               > output-$INSTANCE.json
           done
 
-      # ✅ Upload logs
+      # ✅ Upload Logs
       - name: Upload logs
         uses: actions/upload-artifact@v4
         with:
