@@ -1,353 +1,122 @@
-name: Run Server Info on EC2
+name: Dev SSM - Server Info (S3 Output)
 
 on:
   workflow_dispatch:
     inputs:
-      instance_id:
-        description: 'EC2 Instance ID (optional, uses default if empty)'
-        required: false
-        default: 'i-01edf5a092db9d3e3'
+      environment:
+        description: "Target environment (must be dev)"
+        required: true
+        default: "dev"
+
+permissions:
+  id-token: write
+  contents: read
 
 env:
   AWS_REGION: us-west-1
-  AWS_DEFAULT_REGION: us-west-1
+  ROLE_ARN: arn:aws:iam::034362042633:role/github-role11
   S3_BUCKET: dev-ssm-server-logs
   S3_PREFIX: server-info
-  INSTANCE_ID: i-01edf5a092db9d3e3
-  ROLE_ARN: arn:aws:iam::034362042633:role/github-role11
 
 jobs:
-  run-server-info:
+  run-ssm:
     runs-on: ubuntu-latest
-    
-    permissions:
-      id-token: write
-      contents: read
 
     steps:
+
+      # Checkout Repository
       - name: Checkout Repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
 
+      # Validate Environment
+      - name: Validate Environment
+        run: |
+          if [[ "${{ github.event.inputs.environment }}" != "dev" ]]; then
+            echo "This workflow is restricted to DEV only."
+            exit 1
+          fi
+
+      # Configure AWS Credentials (OIDC)
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ env.ROLE_ARN }}
-          role-session-name: github-actions-${{ github.run_id }}
           aws-region: ${{ env.AWS_REGION }}
-          role-duration-seconds: 3600
 
-      - name: Validate Script Exists
+      # Get DEV Instance
+      - name: Get DEV Instance
+        run: |
+          INSTANCE=$(aws ec2 describe-instances \
+            --filters "Name=tag:Environment,Values=dev" \
+            --query "Reservations[0].Instances[0].InstanceId" \
+            --output text)
+
+          if [ -z "$INSTANCE" ] || [ "$INSTANCE" == "None" ]; then
+            echo "No DEV instances found."
+            exit 1
+          fi
+
+          echo "Found DEV instance: $INSTANCE"
+          echo "INSTANCE_ID=$INSTANCE" >> $GITHUB_ENV
+
+      # Execute Script via SSM
+      - name: Execute server_info.sh via SSM
         run: |
           if [ ! -f scripts/server_info.sh ]; then
-            echo "❌ ERROR: scripts/server_info.sh not found!"
-            echo "Current directory: $(pwd)"
-            echo "Directory contents:"
-            ls -la
-            if [ -d scripts ]; then
-              echo "Scripts directory contents:"
-              ls -la scripts/
-            fi
-            exit 1
-          fi
-          echo "✓ Script found successfully"
-          ls -lh scripts/server_info.sh
-          echo "Script preview (first 10 lines):"
-          head -n 10 scripts/server_info.sh
-
-      - name: Check Instance State
-        id: check-instance
-        run: |
-          INSTANCE_ID=${{ github.event.inputs.instance_id || env.INSTANCE_ID }}
-          echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_ENV
-          
-          echo "🔍 Checking instance state for: $INSTANCE_ID"
-          
-          INSTANCE_STATE=$(aws ec2 describe-instances \
-            --instance-ids "$INSTANCE_ID" \
-            --region ${{ env.AWS_REGION }} \
-            --query "Reservations[0].Instances[0].State.Name" \
-            --output text 2>&1)
-          
-          if [[ $? -ne 0 ]] || [[ "$INSTANCE_STATE" == "None" ]] || [[ -z "$INSTANCE_STATE" ]]; then
-            echo "❌ ERROR: Instance $INSTANCE_ID not found or not accessible"
-            echo "Response: $INSTANCE_STATE"
-            exit 1
-          fi
-          
-          echo "Current instance state: $INSTANCE_STATE"
-          echo "instance_state=$INSTANCE_STATE" >> $GITHUB_OUTPUT
-          
-          # Get additional instance info
-          echo "📋 Instance Details:"
-          aws ec2 describe-instances \
-            --instance-ids "$INSTANCE_ID" \
-            --region ${{ env.AWS_REGION }} \
-            --query 'Reservations[0].Instances[0].[InstanceId,InstanceType,State.Name,LaunchTime,PrivateIpAddress,PublicIpAddress]' \
-            --output table
-
-      - name: Start Instance if Stopped
-        if: steps.check-instance.outputs.instance_state != 'running'
-        run: |
-          INSTANCE_ID=${{ env.INSTANCE_ID }}
-          CURRENT_STATE=${{ steps.check-instance.outputs.instance_state }}
-          
-          echo "⚠️  Instance is currently in '$CURRENT_STATE' state. Starting it..."
-          
-          aws ec2 start-instances \
-            --instance-ids "$INSTANCE_ID" \
-            --region ${{ env.AWS_REGION }} \
-            --output json | jq '.StartingInstances'
-          
-          echo "⏳ Waiting for instance to reach 'running' state..."
-          aws ec2 wait instance-running \
-            --instance-ids "$INSTANCE_ID" \
-            --region ${{ env.AWS_REGION }}
-          
-          echo "✓ Instance is now running"
-
-      - name: Wait for SSM Agent Ready
-        id: ssm-ready
-        run: |
-          INSTANCE_ID=${{ env.INSTANCE_ID }}
-          MAX_ATTEMPTS=30
-          ATTEMPT=0
-          
-          echo "⏳ Waiting for SSM agent to be ready on instance $INSTANCE_ID..."
-          
-          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
-            PING_STATUS=$(aws ssm describe-instance-information \
-              --instance-information-filter-list "key=InstanceIds,valueSet=$INSTANCE_ID" \
-              --region ${{ env.AWS_REGION }} \
-              --query "InstanceInformationList[0].PingStatus" \
-              --output text 2>&1)
-            
-            if [[ $? -eq 0 ]] && [[ "$PING_STATUS" != "None" ]]; then
-              echo "[$((ATTEMPT+1))/$MAX_ATTEMPTS] Ping status: $PING_STATUS"
-              
-              if [[ "$PING_STATUS" == "Online" ]]; then
-                echo "✓ SSM agent is online and ready!"
-                echo "ssm_ready=true" >> $GITHUB_OUTPUT
-                break
-              fi
-            else
-              echo "[$((ATTEMPT+1))/$MAX_ATTEMPTS] Waiting for SSM agent... (status: $PING_STATUS)"
-            fi
-            
-            ATTEMPT=$((ATTEMPT+1))
-            sleep 5
-          done
-          
-          if [ $ATTEMPT -eq $MAX_ATTEMPTS ]; then
-            echo "❌ ERROR: SSM agent did not become ready after $((MAX_ATTEMPTS*5)) seconds"
-            echo "Instance may not have SSM agent installed or IAM role configured"
+            echo "scripts/server_info.sh not found!"
             exit 1
           fi
 
-      - name: Send Command to EC2
-        id: send-command
-        run: |
-          INSTANCE_ID=${{ env.INSTANCE_ID }}
-          S3_BUCKET=${{ env.S3_BUCKET }}
-          S3_PREFIX=${{ env.S3_PREFIX }}
-          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-          
-          echo "📤 Preparing script for execution..."
-          
-          # Read the script
-          SCRIPT_CONTENT=$(cat scripts/server_info.sh)
-          
-          echo "Script size: $(echo "$SCRIPT_CONTENT" | wc -c) bytes"
-          
-          # Send command to instance
-          echo "Sending command to instance..."
-          COMMAND_RESPONSE=$(aws ssm send-command \
+          COMMAND_ID=$(aws ssm send-command \
             --document-name "AWS-RunShellScript" \
-            --instance-ids "$INSTANCE_ID" \
-            --parameters "commands=$(printf '%s\n' "$SCRIPT_CONTENT")" \
-            --comment "Run server_info.sh from GitHub Actions - $TIMESTAMP" \
-            --output-s3-bucket-name "$S3_BUCKET" \
-            --output-s3-key-prefix "$S3_PREFIX/$TIMESTAMP" \
-            --region ${{ env.AWS_REGION }} \
-            --output json)
-          
-          COMMAND_ID=$(echo "$COMMAND_RESPONSE" | jq -r ".Command.CommandId // empty")
-          
-          if [[ -z "$COMMAND_ID" ]]; then
-            echo "❌ ERROR: Failed to get Command ID from response"
-            echo "Response:"
-            echo "$COMMAND_RESPONSE" | jq .
-            exit 1
-          fi
-          
-          echo "✓ Command sent successfully!"
-          echo "Command ID: $COMMAND_ID"
-          echo "Target Instance: $INSTANCE_ID"
-          echo "S3 Output: s3://$S3_BUCKET/$S3_PREFIX/$TIMESTAMP/"
-          
-          echo "command_id=$COMMAND_ID" >> $GITHUB_OUTPUT
-          echo "COMMAND_ID=$COMMAND_ID" >> $GITHUB_ENV
-          echo "S3_OUTPUT_PATH=s3://$S3_BUCKET/$S3_PREFIX/$TIMESTAMP/" >> $GITHUB_ENV
+            --instance-ids $INSTANCE_ID \
+            --parameters commands="$(jq -R -s -c 'split("\n")[:-1]' scripts/server_info.sh)" \
+            --comment "Run server_info.sh from GitHub Actions" \
+            --output-s3-bucket-name $S3_BUCKET \
+            --output-s3-key-prefix $S3_PREFIX \
+            --query "Command.CommandId" \
+            --output text)
 
-      - name: Wait for Command Execution
-        id: command-status
-        run: |
-          COMMAND_ID=${{ env.COMMAND_ID }}
-          INSTANCE_ID=${{ env.INSTANCE_ID }}
-          MAX_ATTEMPTS=120
-          ATTEMPT=0
-          
-          echo "⏳ Waiting for command execution to complete..."
           echo "Command ID: $COMMAND_ID"
-          echo "Instance ID: $INSTANCE_ID"
-          echo ""
-          
-          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+          echo "COMMAND_ID=$COMMAND_ID" >> $GITHUB_ENV
+
+          echo "Waiting for command execution..."
+
+          # Poll invocation status (Safe & reliable)
+          while true; do
             STATUS=$(aws ssm get-command-invocation \
-              --command-id "$COMMAND_ID" \
-              --instance-id "$INSTANCE_ID" \
-              --region ${{ env.AWS_REGION }} \
+              --command-id $COMMAND_ID \
+              --instance-id $INSTANCE_ID \
               --query "Status" \
-              --output text 2>&1)
-            
-            echo "[$((ATTEMPT+1))/$MAX_ATTEMPTS] Status: $STATUS"
-            
+              --output text 2>/dev/null || echo "Pending")
+
+            echo "Current status: $STATUS"
+
             if [[ "$STATUS" == "Success" ]]; then
-              echo ""
-              echo "✓ Command executed successfully!"
-              echo "command_final_status=Success" >> $GITHUB_OUTPUT
               break
             elif [[ "$STATUS" == "Failed" || "$STATUS" == "Cancelled" || "$STATUS" == "TimedOut" ]]; then
-              echo ""
-              echo "❌ Command failed with status: $STATUS"
-              echo "command_final_status=$STATUS" >> $GITHUB_OUTPUT
+              echo "Command failed with status: $STATUS"
               exit 1
             fi
-            
-            ATTEMPT=$((ATTEMPT+1))
+
             sleep 5
           done
-          
-          if [ $ATTEMPT -eq $MAX_ATTEMPTS ]; then
-            echo ""
-            echo "❌ ERROR: Command execution timeout after $((MAX_ATTEMPTS*5)) seconds"
-            exit 1
-          fi
 
-      - name: Retrieve Command Output
-        id: command-output
-        if: success()
-        run: |
-          COMMAND_ID=${{ env.COMMAND_ID }}
-          INSTANCE_ID=${{ env.INSTANCE_ID }}
-          
-          echo "📋 Retrieving command output..."
-          echo ""
-          
-          # Get stdout
-          STDOUT=$(aws ssm get-command-invocation \
-            --command-id "$COMMAND_ID" \
-            --instance-id "$INSTANCE_ID" \
-            --region ${{ env.AWS_REGION }} \
-            --query 'StandardOutputContent' \
-            --output text)
-          
-          # Get stderr
-          STDERR=$(aws ssm get-command-invocation \
-            --command-id "$COMMAND_ID" \
-            --instance-id "$INSTANCE_ID" \
-            --region ${{ env.AWS_REGION }} \
-            --query 'StandardErrorContent' \
-            --output text)
-          
-          # Get exit code
-          EXIT_CODE=$(aws ssm get-command-invocation \
-            --command-id "$COMMAND_ID" \
-            --instance-id "$INSTANCE_ID" \
-            --region ${{ env.AWS_REGION }} \
-            --query 'ResponseCode' \
-            --output text)
-          
-          echo "=== COMMAND OUTPUT ==="
-          echo "$STDOUT"
-          echo ""
-          
-          if [[ -n "$STDERR" && "$STDERR" != "None" ]]; then
-            echo "=== STDERR ==="
-            echo "$STDERR"
-            echo ""
-          fi
-          
-          echo "Exit Code: $EXIT_CODE"
-          
-          # Save to output
-          {
-            echo "stdout<<EOF"
-            echo "$STDOUT"
-            echo "EOF"
-            echo "stderr<<EOF"
-            echo "$STDERR"
-            echo "EOF"
-            echo "exit_code=$EXIT_CODE"
-          } >> $GITHUB_OUTPUT
+          echo "Command execution completed successfully."
 
-      - name: Verify S3 Output
-        if: success()
+      # Print Script Output in GitHub Logs
+      - name: Print Script Output
         run: |
-          S3_OUTPUT_PATH=${{ env.S3_OUTPUT_PATH }}
-          
-          echo "📦 Checking S3 bucket for command output..."
-          echo "Path: $S3_OUTPUT_PATH"
-          echo ""
-          
-          aws s3 ls "$S3_OUTPUT_PATH" --recursive || echo "⚠️  No output files found yet (may still be uploading)"
-          
-          echo ""
-          echo "Recent files in S3:"
-          aws s3 ls "s3://${{ env.S3_BUCKET }}/${{ env.S3_PREFIX }}/" --recursive --human-readable --summarize | head -n 20
+          echo "Fetching output from instance: $INSTANCE_ID"
 
-      - name: Summary
-        if: success()
-        run: |
-          echo "✅ Workflow Completed Successfully!"
-          echo ""
-          echo "📊 Summary:"
-          echo "  Instance ID: ${{ env.INSTANCE_ID }}"
-          echo "  Command ID: ${{ env.COMMAND_ID }}"
-          echo "  S3 Output: ${{ env.S3_OUTPUT_PATH }}"
-          echo "  Exit Code: ${{ steps.command-output.outputs.exit_code }}"
+          aws ssm get-command-invocation \
+            --command-id $COMMAND_ID \
+            --instance-id $INSTANCE_ID \
+            --query "StandardOutputContent" \
+            --output text
 
-      - name: Troubleshooting Guide
-        if: failure()
+      # Print S3 Location
+      - name: Print S3 Output Location
         run: |
-          echo "❌ Workflow Failed!"
-          echo ""
-          echo "🔧 Troubleshooting Checklist:"
-          echo ""
-          echo "1. ✓ Verify EC2 Instance State"
-          echo "   aws ec2 describe-instances --instance-ids ${{ env.INSTANCE_ID }} --region ${{ env.AWS_REGION }}"
-          echo ""
-          echo "2. ✓ Check SSM Agent Status"
-          echo "   aws ssm describe-instance-information --region ${{ env.AWS_REGION }}"
-          echo ""
-          echo "3. ✓ Verify EC2 Instance IAM Role"
-          echo "   - Role must have AmazonSSMManagedInstanceCore policy"
-          echo "   - Or equivalent permissions for SSM operations"
-          echo ""
-          echo "4. ✓ Verify scripts/server_info.sh Exists"
-          echo "   ls -la scripts/server_info.sh"
-          echo ""
-          echo "5. ✓ Check GitHub Role Permissions"
-          echo "   - Ensure github-role11 has all required permissions"
-          echo "   - Review the IAM policy provided"
-          echo ""
-          echo "6. ✓ Verify S3 Bucket"
-          echo "   aws s3 ls s3://${{ env.S3_BUCKET }}/"
-          echo ""
-          echo "7. ✓ Check AWS Credentials"
-          echo "   - Verify OIDC token exchange is working"
-          echo "   - Check role ARN: ${{ env.ROLE_ARN }}"
-          echo ""
-          echo "8. ✓ View Command Invocation Details"
-          echo "   aws ssm get-command-invocation --command-id <COMMAND_ID> --instance-id ${{ env.INSTANCE_ID }} --region ${{ env.AWS_REGION }} --output json"
+          echo "SSM output stored in:"
+          echo "s3://$S3_BUCKET/$S3_PREFIX/"
