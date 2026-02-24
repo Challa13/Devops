@@ -1,4 +1,4 @@
-name: Dev SSM Execution
+name: Dev SSM - Server Info
 
 on:
   workflow_dispatch:
@@ -7,28 +7,13 @@ on:
         description: "Target environment (must be dev)"
         required: true
         default: "dev"
-      target_mode:
-        description: "tag or instance"
-        required: true
-        default: "tag"
-      tag_key:
-        description: "Tag key (if tag mode)"
-        required: false
-        default: "Environment"
-      tag_value:
-        description: "Tag value (if tag mode)"
-        required: false
-        default: "dev"
-      instance_ids:
-        description: "Comma separated instance IDs (if instance mode)"
-        required: false
       dry_run:
-        description: "Dry run mode (true/false)"
+        description: "Dry run only (true/false)"
         required: true
-        default: "true"
+        default: "false"
 
   schedule:
-    - cron: "0 6 * * *"   # Daily at 6 AM UTC
+    - cron: "0 6 * * *"   # daily 6 AM UTC
 
 permissions:
   id-token: write
@@ -36,83 +21,86 @@ permissions:
 
 env:
   AWS_REGION: us-east-1
-  S3_LOG_BUCKET: my-dev-ssm-logs-bucket
 
 jobs:
-  ssm-run:
+  run-ssm:
     runs-on: ubuntu-latest
 
     steps:
 
-      - name: 🛑 DEV Guardrail Check
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # 🛑 DEV Guardrail
+      - name: Validate Environment
         if: github.event_name == 'workflow_dispatch'
         run: |
           if [[ "${{ github.event.inputs.environment }}" != "dev" ]]; then
-            echo "ERROR: This workflow is restricted to DEV only."
+            echo "This workflow is restricted to DEV only."
             exit 1
           fi
 
-      - name: Configure AWS Credentials via OIDC
+      # 🔐 OIDC Authentication
+      - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::<ACCOUNT_ID>:role/GitHubOIDC-Dev-SSM-Role
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Determine Target Instances
-        id: targets
+      # 🔎 Verify DEV instances exist
+      - name: Check DEV Instances
+        id: check_instances
         run: |
-          if [[ "${{ github.event_name }}" == "schedule" ]]; then
-            echo "Running scheduled job - defaulting to dev tag"
-            TARGETS="Key=tag:Environment,Values=dev"
-          else
-            if [[ "${{ github.event.inputs.target_mode }}" == "tag" ]]; then
-              TARGETS="Key=tag:${{ github.event.inputs.tag_key }},Values=${{ github.event.inputs.tag_value }}"
-            else
-              IDS=$(echo "${{ github.event.inputs.instance_ids }}" | tr ',' ' ')
-              TARGETS="Key=instanceIds,Values=$IDS"
-            fi
+          INSTANCES=$(aws ec2 describe-instances \
+            --filters "Name=tag:Environment,Values=dev" \
+            --query "Reservations[].Instances[].InstanceId" \
+            --output text)
+
+          if [ -z "$INSTANCES" ]; then
+            echo "No DEV instances found."
+            exit 1
           fi
 
-          echo "targets=$TARGETS" >> $GITHUB_OUTPUT
+          echo "instances=$INSTANCES" >> $GITHUB_OUTPUT
+          echo "Found DEV instances: $INSTANCES"
 
-      - name: Dry Run Check
+      # 🧪 Dry Run
+      - name: Dry Run Mode
         if: github.event_name == 'workflow_dispatch' && github.event.inputs.dry_run == 'true'
         run: |
-          echo "Dry run enabled. Would target:"
-          echo "${{ steps.targets.outputs.targets }}"
+          echo "Dry run enabled."
+          echo "Would target instances:"
+          echo "${{ steps.check_instances.outputs.instances }}"
           exit 0
 
+      # 🚀 Send server_info.sh to SSM
       - name: Send SSM Command
         id: send_command
         run: |
           COMMAND_ID=$(aws ssm send-command \
             --document-name "AWS-RunShellScript" \
-            --targets "${{ steps.targets.outputs.targets }}" \
-            --parameters commands=["hostname","uptime","df -h","free -m"] \
-            --comment "GitHub Dev SSM Execution" \
+            --targets "Key=tag:Environment,Values=dev" \
+            --parameters commands="$(jq -R -s -c 'split("\n")[:-1]' scripts/server_info.sh)" \
+            --comment "Run server_info.sh from GitHub Actions" \
             --query "Command.CommandId" \
             --output text)
 
           echo "command_id=$COMMAND_ID" >> $GITHUB_OUTPUT
           echo "Command ID: $COMMAND_ID"
 
-      - name: Wait for Command Completion
+      # ⏳ Wait for completion (first instance to confirm success)
+      - name: Wait for SSM completion
         run: |
+          FIRST_INSTANCE=$(echo "${{ steps.check_instances.outputs.instances }}" | awk '{print $1}')
           aws ssm wait command-executed \
             --command-id ${{ steps.send_command.outputs.command_id }} \
-            --instance-id $(aws ec2 describe-instances \
-              --filters "Name=tag:Environment,Values=dev" \
-              --query "Reservations[].Instances[].InstanceId" \
-              --output text | awk '{print $1}')
+            --instance-id $FIRST_INSTANCE
 
-      - name: Collect Output
+      # 📥 Collect Output
+      - name: Collect Outputs
         run: |
           mkdir -p logs
-          for INSTANCE in $(aws ec2 describe-instances \
-            --filters "Name=tag:Environment,Values=dev" \
-            --query "Reservations[].Instances[].InstanceId" \
-            --output text); do
-
+          for INSTANCE in ${{ steps.check_instances.outputs.instances }}; do
             aws ssm get-command-invocation \
               --command-id ${{ steps.send_command.outputs.command_id }} \
               --instance-id $INSTANCE \
@@ -120,12 +108,9 @@ jobs:
               --output text > logs/$INSTANCE.txt
           done
 
-      - name: Upload Logs to GitHub Artifact
+      # 📦 Upload Logs
+      - name: Upload Logs as Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ssm-dev-logs
+          name: dev-ssm-server-info
           path: logs/
-
-      - name: Upload Logs to S3
-        run: |
-          aws s3 cp logs/ s3://${{ env.S3_LOG_BUCKET }}/$(date +%F)/ --recursive
