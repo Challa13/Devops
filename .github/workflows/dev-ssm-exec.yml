@@ -110,3 +110,7 @@ jobs:
         run: |
           echo "Listing S3 Buckets..."
           aws s3 ls
+
+      - name: Debug Identity
+        run: |
+          aws sts get-caller-identity
