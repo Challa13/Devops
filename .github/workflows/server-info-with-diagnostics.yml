@@ -114,7 +114,7 @@ jobs:
           if [[ "$PING_STATUS" == "MISSING" ]]; then
             echo "❌ Instance not visible to SSM (agent may not be installed or configured)"
             echo ""
-            echo "Step 2: Attempting to get instance details via EC2..."
+            echo "Step 2: Instance details via EC2:"
             aws ec2 describe-instances \
               --instance-ids "$INSTANCE_ID" \
               --region ${{ env.AWS_REGION }} \
@@ -131,17 +131,11 @@ jobs:
             echo "diagnose_status=agent_ok" >> $GITHUB_OUTPUT
           fi
 
-      - name: Install SSM Agent (if needed)
+      - name: Create SSM Agent Install Script
         if: steps.diagnose.outputs.diagnose_status == 'agent_missing' && github.event.inputs.install_ssm_agent == 'true'
         run: |
-          INSTANCE_ID=${{ env.INSTANCE_ID }}
-          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-          
-          echo "📦 Installing SSM Agent on instance..."
-          echo ""
-          
-          # Create script to install SSM agent
-          INSTALL_SCRIPT='#!/bin/bash
+          cat > /tmp/install_ssm_agent.sh << 'SCRIPT_EOF'
+          #!/bin/bash
           set -e
           echo "=== SSM Agent Installation ==="
           echo "Instance: $(hostname)"
@@ -183,13 +177,32 @@ jobs:
           echo ""
           echo "=== Installation Complete ==="
           systemctl status amazon-ssm-agent --no-pager
-          '
+          SCRIPT_EOF
           
-          # Send the install command
+          chmod +x /tmp/install_ssm_agent.sh
+          echo "✓ Install script created"
+
+      - name: Send SSM Agent Install Command
+        if: steps.diagnose.outputs.diagnose_status == 'agent_missing' && github.event.inputs.install_ssm_agent == 'true'
+        id: install-ssm
+        run: |
+          INSTANCE_ID=${{ env.INSTANCE_ID }}
+          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+          
+          echo "📦 Sending SSM Agent install command..."
+          
+          # Read script and encode it as JSON array
+          SCRIPT_CONTENT=$(cat /tmp/install_ssm_agent.sh | jq -R -s -c 'split("\n")[:-1]')
+          
+          # Create JSON parameter
+          PARAMS=$(jq -n --argjson commands "$SCRIPT_CONTENT" '{commands: $commands}')
+          
+          echo "Command parameters prepared (size: $(echo "$PARAMS" | wc -c) bytes)"
+          
           COMMAND_RESPONSE=$(aws ssm send-command \
             --document-name "AWS-RunShellScript" \
             --instance-ids "$INSTANCE_ID" \
-            --parameters "commands=$INSTALL_SCRIPT" \
+            --parameters "$PARAMS" \
             --comment "Install SSM Agent - $TIMESTAMP" \
             --output-s3-bucket-name "${{ env.S3_BUCKET }}" \
             --output-s3-key-prefix "${{ env.S3_PREFIX }}/ssm-install/$TIMESTAMP" \
@@ -199,8 +212,12 @@ jobs:
           INSTALL_COMMAND_ID=$(echo "$COMMAND_RESPONSE" | jq -r ".Command.CommandId // empty")
           
           if [[ -z "$INSTALL_COMMAND_ID" ]]; then
-            echo "⚠️  Could not send install command via SSM (agent still not available)"
-            echo "Please manually install SSM agent on the instance:"
+            echo "⚠️  Could not send install command via SSM"
+            echo "Error response:"
+            echo "$COMMAND_RESPONSE" | jq .
+            echo ""
+            echo "This means SSM agent is still not available."
+            echo "Please manually SSH into the instance and run:"
             echo ""
             echo "For Amazon Linux 2:"
             echo "  sudo yum install -y amazon-ssm-agent"
@@ -214,12 +231,18 @@ jobs:
           fi
           
           echo "✓ Install command sent: $INSTALL_COMMAND_ID"
-          echo "install_command_id=$INSTALL_COMMAND_ID" >> $GITHUB_ENV
-          
-          # Wait for installation
-          echo "⏳ Waiting for installation to complete..."
+          echo "install_command_id=$INSTALL_COMMAND_ID" >> $GITHUB_OUTPUT
+          echo "INSTALL_COMMAND_ID=$INSTALL_COMMAND_ID" >> $GITHUB_ENV
+
+      - name: Wait for SSM Agent Installation
+        if: steps.diagnose.outputs.diagnose_status == 'agent_missing' && github.event.inputs.install_ssm_agent == 'true'
+        run: |
+          INSTALL_COMMAND_ID=${{ env.INSTALL_COMMAND_ID }}
+          INSTANCE_ID=${{ env.INSTANCE_ID }}
           MAX_ATTEMPTS=60
           ATTEMPT=0
+          
+          echo "⏳ Waiting for SSM Agent installation to complete..."
           
           while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
             STATUS=$(aws ssm get-command-invocation \
@@ -232,10 +255,12 @@ jobs:
             echo "[$((ATTEMPT+1))/$MAX_ATTEMPTS] Installation status: $STATUS"
             
             if [[ "$STATUS" == "Success" ]]; then
-              echo "✓ SSM Agent installed successfully"
+              echo "✓ SSM Agent installed successfully!"
               break
             elif [[ "$STATUS" == "Failed" || "$STATUS" == "Cancelled" ]]; then
-              echo "❌ Installation failed"
+              echo "❌ Installation failed with status: $STATUS"
+              echo ""
+              echo "Error output:"
               aws ssm get-command-invocation \
                 --command-id "$INSTALL_COMMAND_ID" \
                 --instance-id "$INSTANCE_ID" \
@@ -247,6 +272,11 @@ jobs:
             ATTEMPT=$((ATTEMPT+1))
             sleep 5
           done
+          
+          if [ $ATTEMPT -eq $MAX_ATTEMPTS ]; then
+            echo "❌ Installation timeout after $((MAX_ATTEMPTS*5)) seconds"
+            exit 1
+          fi
 
       - name: Wait for SSM Agent Registration
         id: ssm-ready
@@ -284,11 +314,29 @@ jobs:
             echo "❌ SSM agent did not register after $((MAX_ATTEMPTS*5)) seconds"
             echo ""
             echo "Troubleshooting:"
-            echo "1. Check instance IAM role has 'AmazonSSMManagedInstanceCore' policy"
-            echo "2. Verify instance has outbound internet or VPC endpoint access"
-            echo "3. Check EC2 instance logs: /var/log/amazon/ssm/amazon-ssm-agent.log"
+            echo "1. Verify instance IAM role has 'AmazonSSMManagedInstanceCore' policy"
+            echo "2. Check instance has outbound internet or VPC endpoint access to SSM"
+            echo "3. SSH into instance and check:"
+            echo "   sudo systemctl status amazon-ssm-agent"
+            echo "   sudo tail -f /var/log/amazon/ssm/amazon-ssm-agent.log"
             exit 1
           fi
+
+      - name: Prepare Server Info Script
+        id: prepare-script
+        run: |
+          if [ ! -f scripts/server_info.sh ]; then
+            echo "❌ scripts/server_info.sh not found"
+            exit 1
+          fi
+          
+          # Convert script to JSON array format for SSM
+          SCRIPT_JSON=$(cat scripts/server_info.sh | jq -R -s -c 'split("\n")[:-1]')
+          
+          echo "Script prepared ($(cat scripts/server_info.sh | wc -l) lines)"
+          echo "script_json<<EOF" >> $GITHUB_OUTPUT
+          echo "$SCRIPT_JSON" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Send Server Info Command
         id: send-command
@@ -298,12 +346,14 @@ jobs:
           
           echo "📤 Sending server_info.sh command..."
           
-          SCRIPT_CONTENT=$(cat scripts/server_info.sh)
+          # Use JSON-encoded script
+          SCRIPT_JSON='${{ steps.prepare-script.outputs.script_json }}'
+          PARAMS=$(jq -n --argjson commands "$(echo "$SCRIPT_JSON")" '{commands: $commands}')
           
           COMMAND_RESPONSE=$(aws ssm send-command \
             --document-name "AWS-RunShellScript" \
             --instance-ids "$INSTANCE_ID" \
-            --parameters "commands=$(printf '%s\n' "$SCRIPT_CONTENT")" \
+            --parameters "$PARAMS" \
             --comment "Run server_info.sh - $TIMESTAMP" \
             --output-s3-bucket-name "${{ env.S3_BUCKET }}" \
             --output-s3-key-prefix "${{ env.S3_PREFIX }}/$TIMESTAMP" \
@@ -318,7 +368,8 @@ jobs:
             exit 1
           fi
           
-          echo "✓ Command sent: $COMMAND_ID"
+          echo "✓ Command sent successfully!"
+          echo "Command ID: $COMMAND_ID"
           echo "command_id=$COMMAND_ID" >> $GITHUB_OUTPUT
           echo "COMMAND_ID=$COMMAND_ID" >> $GITHUB_ENV
 
@@ -353,7 +404,7 @@ jobs:
             sleep 5
           done
 
-      - name: Retrieve Output
+      - name: Retrieve and Display Output
         if: success()
         run: |
           COMMAND_ID=${{ env.COMMAND_ID }}
@@ -361,6 +412,7 @@ jobs:
           
           echo "📋 Command Output:"
           echo ""
+          echo "=== STDOUT ==="
           
           aws ssm get-command-invocation \
             --command-id "$COMMAND_ID" \
@@ -370,58 +422,85 @@ jobs:
             --output text
           
           echo ""
+          echo "=== STDERR ==="
+          aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --region ${{ env.AWS_REGION }} \
+            --query 'StandardErrorContent' \
+            --output text
+          
+          echo ""
           echo "✅ Workflow Complete!"
 
-      - name: Emergency Troubleshooting
-        if: failure()
+      - name: Emergency Manual Steps
+        if: failure() && steps.diagnose.outputs.diagnose_status == 'agent_missing'
         run: |
           cat << 'EOF'
           ========================================
-          EMERGENCY TROUBLESHOOTING GUIDE
+          SSM AGENT INSTALLATION - MANUAL STEPS
           ========================================
           
-          Problem: SSM Agent is not reporting
+          Since automatic installation failed, please do this manually:
           
-          Solution 1: Check Instance IAM Role
-          -----------------------------------
-          1. Go to AWS EC2 Console
-          2. Select instance: ${{ env.INSTANCE_ID }}
-          3. Click "Security" tab
-          4. Check "IAM role" field
-          5. If empty, attach role with policies:
-             - AmazonSSMManagedInstanceCore
-             - AmazonEC2RoleforSSM
+          STEP 1: SSH into Instance
+          --------------------------
+          aws ec2-instance-connect send-ssh-public-key \
+            --instance-id i-01edf5a092db9d3e3 \
+            --instance-os-user ec2-user \
+            --ssh-public-key-body file://~/.ssh/id_rsa.pub \
+            --region us-west-1
           
-          Solution 2: Manually Install SSM Agent
-          ----------------------------------------
+          Or use AWS Systems Manager Session Manager:
+          aws ssm start-session --target i-01edf5a092db9d3e3 --region us-west-1
+          
+          
+          STEP 2: Install SSM Agent (Choose your OS)
+          -------------------------------------------
+          
           For Amazon Linux 2:
-            ssh -i <key.pem> ec2-user@<instance-ip>
+            sudo yum update -y
             sudo yum install -y amazon-ssm-agent
             sudo systemctl start amazon-ssm-agent
             sudo systemctl enable amazon-ssm-agent
             sudo systemctl status amazon-ssm-agent
           
-          For Ubuntu:
-            ssh -i <key.pem> ubuntu@<instance-ip>
+          For Ubuntu 20.04/22.04:
             sudo apt-get update
             sudo apt-get install -y amazon-ssm-agent
             sudo systemctl start amazon-ssm-agent
             sudo systemctl enable amazon-ssm-agent
             sudo systemctl status amazon-ssm-agent
           
-          Solution 3: Check VPC Connectivity
-          ------------------------------------
-          Verify instance can reach SSM endpoints:
-          - If no internet: Create VPC endpoints for:
-            - ssm
-            - ec2messages
-            - ssmmessages
+          For RHEL/CentOS:
+            sudo yum update -y
+            sudo yum install -y amazon-ssm-agent
+            sudo systemctl start amazon-ssm-agent
+            sudo systemctl enable amazon-ssm-agent
+            sudo systemctl status amazon-ssm-agent
           
-          Solution 4: Check Agent Logs
+          
+          STEP 3: Verify Agent is Running
+          ---------------------------------
+          sudo systemctl status amazon-ssm-agent
+          
+          # Check logs
+          sudo tail -100 /var/log/amazon/ssm/amazon-ssm-agent.log
+          
+          
+          STEP 4: Verify in AWS Console
           ----------------------------
-          ssh to instance and run:
-            sudo tail -f /var/log/amazon/ssm/amazon-ssm-agent.log
-            sudo tail -f /var/log/amazon/ssm/errors.log
+          aws ssm describe-instance-information \
+            --region us-west-1 \
+            --query "InstanceInformationList[?InstanceIds=='i-01edf5a092db9d3e3']"
+          
+          Should show PingStatus: "Online"
+          
+          
+          STEP 5: Re-run Workflow
+          ----------------------
+          Once agent is Online, re-run this workflow.
           
           ========================================
           EOF
+          exit 1
