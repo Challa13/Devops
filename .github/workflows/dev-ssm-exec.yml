@@ -44,7 +44,7 @@ jobs:
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::<ACCOUNT_ID>:role/GitHubOIDC-Dev-SSM-Role
+          role-to-assume: arn:aws:iam::034362042633:role/Github-role
           aws-region: ${{ env.AWS_REGION }}
 
       # 🔎 Verify DEV instances exist
