@@ -1,0 +1,427 @@
+name: Run Server Info on EC2 with Diagnostics
+
+on:
+  workflow_dispatch:
+    inputs:
+      instance_id:
+        description: 'EC2 Instance ID'
+        required: false
+        default: 'i-01edf5a092db9d3e3'
+      install_ssm_agent:
+        description: 'Auto-install SSM agent if missing'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+env:
+  AWS_REGION: us-west-1
+  AWS_DEFAULT_REGION: us-west-1
+  S3_BUCKET: dev-ssm-server-logs
+  S3_PREFIX: server-info
+  INSTANCE_ID: i-01edf5a092db9d3e3
+  ROLE_ARN: arn:aws:iam::034362042633:role/github-role11
+
+jobs:
+  diagnose-and-run:
+    runs-on: ubuntu-latest
+    
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          role-session-name: github-actions-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 3600
+
+      - name: Validate Script Exists
+        run: |
+          if [ ! -f scripts/server_info.sh ]; then
+            echo "❌ ERROR: scripts/server_info.sh not found!"
+            exit 1
+          fi
+          echo "✓ Script found"
+
+      - name: Check Instance State
+        id: check-instance
+        run: |
+          INSTANCE_ID=${{ github.event.inputs.instance_id || env.INSTANCE_ID }}
+          echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_ENV
+          
+          echo "🔍 Checking instance: $INSTANCE_ID"
+          
+          INSTANCE_INFO=$(aws ec2 describe-instances \
+            --instance-ids "$INSTANCE_ID" \
+            --region ${{ env.AWS_REGION }} \
+            --query 'Reservations[0].Instances[0]' \
+            --output json)
+          
+          INSTANCE_STATE=$(echo "$INSTANCE_INFO" | jq -r '.State.Name')
+          INSTANCE_ROLE=$(echo "$INSTANCE_INFO" | jq -r '.IamInstanceProfile.Arn // "None"')
+          
+          echo "Instance State: $INSTANCE_STATE"
+          echo "IAM Role: $INSTANCE_ROLE"
+          
+          if [[ "$INSTANCE_STATE" != "running" ]]; then
+            echo "⚠️  Starting instance..."
+            aws ec2 start-instances --instance-ids "$INSTANCE_ID" --region ${{ env.AWS_REGION }}
+            aws ec2 wait instance-running --instance-ids "$INSTANCE_ID" --region ${{ env.AWS_REGION }}
+            echo "✓ Instance is running"
+          fi
+          
+          if [[ "$INSTANCE_ROLE" == "None" ]]; then
+            echo "❌ ERROR: Instance has no IAM role attached!"
+            echo "Please attach an IAM role with SSM permissions to this instance"
+            exit 1
+          fi
+          
+          echo "instance_state=$INSTANCE_STATE" >> $GITHUB_OUTPUT
+          echo "instance_role=$INSTANCE_ROLE" >> $GITHUB_OUTPUT
+
+      - name: Diagnose SSM Agent Status
+        id: diagnose
+        run: |
+          INSTANCE_ID=${{ env.INSTANCE_ID }}
+          
+          echo "🔧 Running Diagnostics..."
+          echo ""
+          
+          # Check if instance appears in SSM
+          echo "Step 1: Checking if instance is visible to SSM..."
+          SSM_INSTANCE=$(aws ssm describe-instance-information \
+            --instance-information-filter-list "key=InstanceIds,valueSet=$INSTANCE_ID" \
+            --region ${{ env.AWS_REGION }} \
+            --query "InstanceInformationList[0]" \
+            --output json)
+          
+          PING_STATUS=$(echo "$SSM_INSTANCE" | jq -r '.PingStatus // "MISSING"')
+          AGENT_VERSION=$(echo "$SSM_INSTANCE" | jq -r '.AgentVersion // "NONE"')
+          
+          echo "  Ping Status: $PING_STATUS"
+          echo "  Agent Version: $AGENT_VERSION"
+          echo ""
+          
+          if [[ "$PING_STATUS" == "MISSING" ]]; then
+            echo "❌ Instance not visible to SSM (agent may not be installed or configured)"
+            echo ""
+            echo "Step 2: Attempting to get instance details via EC2..."
+            aws ec2 describe-instances \
+              --instance-ids "$INSTANCE_ID" \
+              --region ${{ env.AWS_REGION }} \
+              --query 'Reservations[0].Instances[0].[InstanceId,InstanceType,State.Name,IamInstanceProfile.Arn,Platform]' \
+              --output table
+            echo ""
+            echo "Diagnostic Summary:"
+            echo "  - SSM Agent Status: NOT REPORTING"
+            echo "  - Next Step: Need to install/fix SSM agent"
+            echo ""
+            echo "diagnose_status=agent_missing" >> $GITHUB_OUTPUT
+          else
+            echo "✓ Instance is visible to SSM"
+            echo "diagnose_status=agent_ok" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Install SSM Agent (if needed)
+        if: steps.diagnose.outputs.diagnose_status == 'agent_missing' && github.event.inputs.install_ssm_agent == 'true'
+        run: |
+          INSTANCE_ID=${{ env.INSTANCE_ID }}
+          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+          
+          echo "📦 Installing SSM Agent on instance..."
+          echo ""
+          
+          # Create script to install SSM agent
+          INSTALL_SCRIPT='#!/bin/bash
+          set -e
+          echo "=== SSM Agent Installation ==="
+          echo "Instance: $(hostname)"
+          echo "OS: $(uname -s)"
+          echo ""
+          
+          # Detect OS
+          if [ -f /etc/os-release ]; then
+            . /etc/os-release
+            OS=$ID
+          else
+            OS="unknown"
+          fi
+          
+          echo "Detected OS: $OS"
+          
+          # Install based on OS
+          if [[ "$OS" == "ubuntu" || "$OS" == "debian" ]]; then
+            echo "Installing for Ubuntu/Debian..."
+            apt-get update
+            apt-get install -y amazon-ssm-agent
+            systemctl start amazon-ssm-agent
+            systemctl enable amazon-ssm-agent
+            echo "SSM Agent status:"
+            systemctl status amazon-ssm-agent
+          elif [[ "$OS" == "amzn" || "$OS" == "rhel" || "$OS" == "centos" ]]; then
+            echo "Installing for Amazon Linux/RHEL/CentOS..."
+            yum install -y amazon-ssm-agent
+            systemctl start amazon-ssm-agent
+            systemctl enable amazon-ssm-agent
+            echo "SSM Agent status:"
+            systemctl status amazon-ssm-agent
+          else
+            echo "Unsupported OS: $OS"
+            exit 1
+          fi
+          
+          # Verify installation
+          echo ""
+          echo "=== Installation Complete ==="
+          systemctl status amazon-ssm-agent --no-pager
+          '
+          
+          # Send the install command
+          COMMAND_RESPONSE=$(aws ssm send-command \
+            --document-name "AWS-RunShellScript" \
+            --instance-ids "$INSTANCE_ID" \
+            --parameters "commands=$INSTALL_SCRIPT" \
+            --comment "Install SSM Agent - $TIMESTAMP" \
+            --output-s3-bucket-name "${{ env.S3_BUCKET }}" \
+            --output-s3-key-prefix "${{ env.S3_PREFIX }}/ssm-install/$TIMESTAMP" \
+            --region ${{ env.AWS_REGION }} \
+            --output json)
+          
+          INSTALL_COMMAND_ID=$(echo "$COMMAND_RESPONSE" | jq -r ".Command.CommandId // empty")
+          
+          if [[ -z "$INSTALL_COMMAND_ID" ]]; then
+            echo "⚠️  Could not send install command via SSM (agent still not available)"
+            echo "Please manually install SSM agent on the instance:"
+            echo ""
+            echo "For Amazon Linux 2:"
+            echo "  sudo yum install -y amazon-ssm-agent"
+            echo "  sudo systemctl start amazon-ssm-agent"
+            echo ""
+            echo "For Ubuntu:"
+            echo "  sudo apt-get update"
+            echo "  sudo apt-get install -y amazon-ssm-agent"
+            echo "  sudo systemctl start amazon-ssm-agent"
+            exit 1
+          fi
+          
+          echo "✓ Install command sent: $INSTALL_COMMAND_ID"
+          echo "install_command_id=$INSTALL_COMMAND_ID" >> $GITHUB_ENV
+          
+          # Wait for installation
+          echo "⏳ Waiting for installation to complete..."
+          MAX_ATTEMPTS=60
+          ATTEMPT=0
+          
+          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            STATUS=$(aws ssm get-command-invocation \
+              --command-id "$INSTALL_COMMAND_ID" \
+              --instance-id "$INSTANCE_ID" \
+              --region ${{ env.AWS_REGION }} \
+              --query "Status" \
+              --output text 2>&1)
+            
+            echo "[$((ATTEMPT+1))/$MAX_ATTEMPTS] Installation status: $STATUS"
+            
+            if [[ "$STATUS" == "Success" ]]; then
+              echo "✓ SSM Agent installed successfully"
+              break
+            elif [[ "$STATUS" == "Failed" || "$STATUS" == "Cancelled" ]]; then
+              echo "❌ Installation failed"
+              aws ssm get-command-invocation \
+                --command-id "$INSTALL_COMMAND_ID" \
+                --instance-id "$INSTANCE_ID" \
+                --region ${{ env.AWS_REGION }} \
+                --output json | jq '.StandardErrorContent'
+              exit 1
+            fi
+            
+            ATTEMPT=$((ATTEMPT+1))
+            sleep 5
+          done
+
+      - name: Wait for SSM Agent Registration
+        id: ssm-ready
+        run: |
+          INSTANCE_ID=${{ env.INSTANCE_ID }}
+          MAX_ATTEMPTS=60
+          ATTEMPT=0
+          
+          echo "⏳ Waiting for SSM agent to register..."
+          
+          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            PING_STATUS=$(aws ssm describe-instance-information \
+              --instance-information-filter-list "key=InstanceIds,valueSet=$INSTANCE_ID" \
+              --region ${{ env.AWS_REGION }} \
+              --query "InstanceInformationList[0].PingStatus" \
+              --output text 2>&1)
+            
+            if [[ "$PING_STATUS" != "None" && -n "$PING_STATUS" ]]; then
+              echo "[$((ATTEMPT+1))/$MAX_ATTEMPTS] Ping status: $PING_STATUS"
+              
+              if [[ "$PING_STATUS" == "Online" ]]; then
+                echo "✓ SSM agent is Online!"
+                echo "ssm_ready=true" >> $GITHUB_OUTPUT
+                break
+              fi
+            else
+              echo "[$((ATTEMPT+1))/$MAX_ATTEMPTS] Waiting for agent registration..."
+            fi
+            
+            ATTEMPT=$((ATTEMPT+1))
+            sleep 5
+          done
+          
+          if [ $ATTEMPT -eq $MAX_ATTEMPTS ]; then
+            echo "❌ SSM agent did not register after $((MAX_ATTEMPTS*5)) seconds"
+            echo ""
+            echo "Troubleshooting:"
+            echo "1. Check instance IAM role has 'AmazonSSMManagedInstanceCore' policy"
+            echo "2. Verify instance has outbound internet or VPC endpoint access"
+            echo "3. Check EC2 instance logs: /var/log/amazon/ssm/amazon-ssm-agent.log"
+            exit 1
+          fi
+
+      - name: Send Server Info Command
+        id: send-command
+        run: |
+          INSTANCE_ID=${{ env.INSTANCE_ID }}
+          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+          
+          echo "📤 Sending server_info.sh command..."
+          
+          SCRIPT_CONTENT=$(cat scripts/server_info.sh)
+          
+          COMMAND_RESPONSE=$(aws ssm send-command \
+            --document-name "AWS-RunShellScript" \
+            --instance-ids "$INSTANCE_ID" \
+            --parameters "commands=$(printf '%s\n' "$SCRIPT_CONTENT")" \
+            --comment "Run server_info.sh - $TIMESTAMP" \
+            --output-s3-bucket-name "${{ env.S3_BUCKET }}" \
+            --output-s3-key-prefix "${{ env.S3_PREFIX }}/$TIMESTAMP" \
+            --region ${{ env.AWS_REGION }} \
+            --output json)
+          
+          COMMAND_ID=$(echo "$COMMAND_RESPONSE" | jq -r ".Command.CommandId // empty")
+          
+          if [[ -z "$COMMAND_ID" ]]; then
+            echo "❌ Failed to send command"
+            echo "$COMMAND_RESPONSE" | jq .
+            exit 1
+          fi
+          
+          echo "✓ Command sent: $COMMAND_ID"
+          echo "command_id=$COMMAND_ID" >> $GITHUB_OUTPUT
+          echo "COMMAND_ID=$COMMAND_ID" >> $GITHUB_ENV
+
+      - name: Wait for Command Execution
+        run: |
+          COMMAND_ID=${{ env.COMMAND_ID }}
+          INSTANCE_ID=${{ env.INSTANCE_ID }}
+          MAX_ATTEMPTS=120
+          ATTEMPT=0
+          
+          echo "⏳ Waiting for command execution..."
+          
+          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            STATUS=$(aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" \
+              --instance-id "$INSTANCE_ID" \
+              --region ${{ env.AWS_REGION }} \
+              --query "Status" \
+              --output text 2>&1)
+            
+            echo "[$((ATTEMPT+1))/$MAX_ATTEMPTS] Status: $STATUS"
+            
+            if [[ "$STATUS" == "Success" ]]; then
+              echo "✓ Command executed successfully!"
+              break
+            elif [[ "$STATUS" == "Failed" || "$STATUS" == "Cancelled" || "$STATUS" == "TimedOut" ]]; then
+              echo "❌ Command failed with status: $STATUS"
+              exit 1
+            fi
+            
+            ATTEMPT=$((ATTEMPT+1))
+            sleep 5
+          done
+
+      - name: Retrieve Output
+        if: success()
+        run: |
+          COMMAND_ID=${{ env.COMMAND_ID }}
+          INSTANCE_ID=${{ env.INSTANCE_ID }}
+          
+          echo "📋 Command Output:"
+          echo ""
+          
+          aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --region ${{ env.AWS_REGION }} \
+            --query 'StandardOutputContent' \
+            --output text
+          
+          echo ""
+          echo "✅ Workflow Complete!"
+
+      - name: Emergency Troubleshooting
+        if: failure()
+        run: |
+          cat << 'EOF'
+          ========================================
+          EMERGENCY TROUBLESHOOTING GUIDE
+          ========================================
+          
+          Problem: SSM Agent is not reporting
+          
+          Solution 1: Check Instance IAM Role
+          -----------------------------------
+          1. Go to AWS EC2 Console
+          2. Select instance: ${{ env.INSTANCE_ID }}
+          3. Click "Security" tab
+          4. Check "IAM role" field
+          5. If empty, attach role with policies:
+             - AmazonSSMManagedInstanceCore
+             - AmazonEC2RoleforSSM
+          
+          Solution 2: Manually Install SSM Agent
+          ----------------------------------------
+          For Amazon Linux 2:
+            ssh -i <key.pem> ec2-user@<instance-ip>
+            sudo yum install -y amazon-ssm-agent
+            sudo systemctl start amazon-ssm-agent
+            sudo systemctl enable amazon-ssm-agent
+            sudo systemctl status amazon-ssm-agent
+          
+          For Ubuntu:
+            ssh -i <key.pem> ubuntu@<instance-ip>
+            sudo apt-get update
+            sudo apt-get install -y amazon-ssm-agent
+            sudo systemctl start amazon-ssm-agent
+            sudo systemctl enable amazon-ssm-agent
+            sudo systemctl status amazon-ssm-agent
+          
+          Solution 3: Check VPC Connectivity
+          ------------------------------------
+          Verify instance can reach SSM endpoints:
+          - If no internet: Create VPC endpoints for:
+            - ssm
+            - ec2messages
+            - ssmmessages
+          
+          Solution 4: Check Agent Logs
+          ----------------------------
+          ssh to instance and run:
+            sudo tail -f /var/log/amazon/ssm/amazon-ssm-agent.log
+            sudo tail -f /var/log/amazon/ssm/errors.log
+          
+          ========================================
+          EOF
