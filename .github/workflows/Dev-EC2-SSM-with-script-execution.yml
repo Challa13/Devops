@@ -1,4 +1,4 @@
-name: Dev EC2 SSM with-script Execution
+name: Dev EC2 SSM Execution
 
 on:
   workflow_dispatch:
@@ -36,7 +36,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ✅ Configure AWS via OIDC
+      # ✅ OIDC Authentication
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -84,16 +84,24 @@ jobs:
           echo "Would execute scripts/server_info.sh on: ${{ steps.get_instances.outputs.instance_ids }}"
           exit 0
 
-      # ✅ Send Script to SSM and Execute
+      # ✅ Convert Script to JSON
+      - name: Prepare Script for SSM
+        id: prepare_script
+        run: |
+          # Convert script into JSON array format required by SSM
+          SCRIPT_JSON=$(jq -Rs '{commands: split("\n")}' scripts/server_info.sh)
+
+          echo "$SCRIPT_JSON" > ssm-commands.json
+          echo "Prepared SSM command payload"
+
+      # ✅ Send Command
       - name: Execute server_info.sh via SSM
         id: send_command
         run: |
-          SCRIPT_CONTENT=$(cat scripts/server_info.sh)
-
           COMMAND_ID=$(aws ssm send-command \
             --document-name "AWS-RunShellScript" \
             --instance-ids ${{ steps.get_instances.outputs.instance_ids }} \
-            --parameters commands="$SCRIPT_CONTENT" \
+            --parameters file://ssm-commands.json \
             --query "Command.CommandId" \
             --output text)
 
