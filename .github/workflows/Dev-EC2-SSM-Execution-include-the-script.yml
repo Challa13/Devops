@@ -1,0 +1,119 @@
+name: Dev EC2 SSM Execution
+
+on:
+  workflow_dispatch:
+    inputs:
+      instance_id:
+        description: "Specific EC2 Instance ID (optional)"
+        required: false
+      tag_key:
+        description: "Tag key (default: Environment)"
+        required: false
+        default: Environment
+      tag_value:
+        description: "Tag value (default: dev)"
+        required: false
+        default: dev
+      dry_run:
+        description: "Dry run (true/false)"
+        required: false
+        default: "true"
+      script_path:
+        description: "Path to script (e.g., scripts/myscript.sh)"
+        required: true
+        default: "scripts/server_info.sh"
+
+  schedule:
+    - cron: "0 2 * * *"
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-west-1
+
+jobs:
+  ssm-run:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ✅ OIDC Authentication
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::034362042633:role/github-role11
+          aws-region: ${{ env.AWS_REGION }}
+
+      # ✅ Resolve Instances
+      - name: Get EC2 Instance IDs
+        id: get_instances
+        run: |
+          if [[ -n "${{ github.event.inputs.instance_id }}" ]]; then
+            INSTANCE_IDS="${{ github.event.inputs.instance_id }}"
+          else
+            INSTANCE_IDS=$(aws ec2 describe-instances \
+              --filters "Name=tag:${{ github.event.inputs.tag_key || 'Environment' }},Values=${{ github.event.inputs.tag_value || 'dev' }}" \
+                        "Name=instance-state-name,Values=running" \
+              --query "Reservations[].Instances[].InstanceId" \
+              --output text)
+          fi
+
+          if [[ -z "$INSTANCE_IDS" ]]; then
+            echo "❌ No running dev instances found"
+            exit 1
+          fi
+
+          echo "instance_ids=$INSTANCE_IDS" >> $GITHUB_OUTPUT
+
+      # ✅ Send SSM Command (Modified to use script file)
+      - name: Send SSM Command
+        id: send_command
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: |
+          # Read script content and escape for JSON/Shell if necessary
+          # Note: AWS-RunShellScript 'commands' expects a list of strings
+          SCRIPT_CONTENT=$(cat ${{ github.event.inputs.script_path }})
+          
+          COMMAND_ID=$(aws ssm send-command \
+            --document-name "AWS-RunShellScript" \
+            --instance-ids ${{ steps.get_instances.outputs.instance_ids }} \
+            --parameters "commands=[$(printf '%q' "$SCRIPT_CONTENT")]" \
+            --query "Command.CommandId" \
+            --output text)
+
+          echo "command_id=$COMMAND_ID" >> $GITHUB_OUTPUT
+
+      # ✅ Wait & Fetch Output
+      - name: Fetch SSM Output
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: |
+          # We wait for the first instance to finish to ensure the command is processed
+          FIRST_INSTANCE=$(echo ${{ steps.get_instances.outputs.instance_ids }} | awk '{print $1}')
+          aws ssm wait command-executed \
+            --command-id ${{ steps.send_command.outputs.command_id }} \
+            --instance-id $FIRST_INSTANCE
+
+          for INSTANCE in ${{ steps.get_instances.outputs.instance_ids }}
+          do
+            echo "--- Output for $INSTANCE ---"
+            # Get the result
+            RESULT=$(aws ssm get-command-invocation \
+              --command-id ${{ steps.send_command.outputs.command_id }} \
+              --instance-id $INSTANCE)
+            
+            # Save raw JSON for artifact
+            echo "$RESULT" > output-$INSTANCE.json
+            
+            # Print Standard Output to GitHub Log
+            echo "$RESULT" | jq -r '.StandardOutputContent'
+          done
+
+      - name: Upload logs
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ssm-logs
+          path: output-*.json
