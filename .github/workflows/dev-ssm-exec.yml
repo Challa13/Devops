@@ -24,11 +24,11 @@ jobs:
 
     steps:
 
-      # 📥 Checkout Repository
+      # Checkout Repository
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # 🛑 DEV Guardrail
+      # Validate Environment
       - name: Validate Environment
         run: |
           if [[ "${{ github.event.inputs.environment }}" != "dev" ]]; then
@@ -36,16 +36,15 @@ jobs:
             exit 1
           fi
 
-      # 🔐 Configure AWS Credentials (OIDC)
+      # Configure AWS Credentials (OIDC)
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ env.ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # 🔎 Validate DEV Instances Exist
-      - name: Check DEV Instances
-        id: instances
+      # Get DEV Instance
+      - name: Get DEV Instance
         run: |
           INSTANCE=$(aws ec2 describe-instances \
             --filters "Name=tag:Environment,Values=dev" \
@@ -60,7 +59,7 @@ jobs:
           echo "Found DEV instance: $INSTANCE"
           echo "INSTANCE_ID=$INSTANCE" >> $GITHUB_ENV
 
-      # 🚀 Execute Script via SSM (Output to S3)
+      # Execute Script via SSM
       - name: Execute server_info.sh via SSM
         run: |
           if [ ! -f scripts/server_info.sh ]; then
@@ -70,7 +69,7 @@ jobs:
 
           COMMAND_ID=$(aws ssm send-command \
             --document-name "AWS-RunShellScript" \
-            --targets "Key=tag:Environment,Values=dev" \
+            --instance-ids $INSTANCE_ID \
             --parameters commands="$(jq -R -s -c 'split("\n")[:-1]' scripts/server_info.sh)" \
             --comment "Run server_info.sh from GitHub Actions" \
             --output-s3-bucket-name $S3_BUCKET \
@@ -81,13 +80,15 @@ jobs:
           echo "Command ID: $COMMAND_ID"
           echo "COMMAND_ID=$COMMAND_ID" >> $GITHUB_ENV
 
-          echo "Waiting for command completion..."
+          echo "Waiting for command execution..."
 
+          # Poll invocation status (Safe & reliable)
           while true; do
-            STATUS=$(aws ssm list-commands \
+            STATUS=$(aws ssm get-command-invocation \
               --command-id $COMMAND_ID \
-              --query "Commands[0].Status" \
-              --output text)
+              --instance-id $INSTANCE_ID \
+              --query "Status" \
+              --output text 2>/dev/null || echo "Pending")
 
             echo "Current status: $STATUS"
 
@@ -103,10 +104,10 @@ jobs:
 
           echo "Command execution completed successfully."
 
-      # 🖨️ Print Script Output in GitHub Logs
-      - name: Print SSM Output
+      # Print Script Output in GitHub Logs
+      - name: Print Script Output
         run: |
-          echo "Fetching output for Instance: $INSTANCE_ID"
+          echo "Fetching output from instance: $INSTANCE_ID"
 
           aws ssm get-command-invocation \
             --command-id $COMMAND_ID \
@@ -114,7 +115,7 @@ jobs:
             --query "StandardOutputContent" \
             --output text
 
-      # 📦 Show S3 Location
+      # Print S3 Location
       - name: Print S3 Output Location
         run: |
           echo "SSM output stored in:"
