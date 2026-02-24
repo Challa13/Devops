@@ -47,6 +47,18 @@ jobs:
           role-to-assume: arn:aws:iam::034362042633:role/github-role11
           aws-region: ${{ env.AWS_REGION }}
 
+      # ✅ Smart Dev Guardrail
+      - name: Validate Dev Target
+        run: |
+          TAG_VALUE="${{ github.event.inputs.tag_value || 'dev' }}"
+
+          if [[ "$TAG_VALUE" != "dev" ]]; then
+            echo "❌ Only dev environment is allowed."
+            exit 1
+          fi
+
+          echo "✅ Dev guardrail passed"
+
       # ✅ Resolve Instances
       - name: Get EC2 Instance IDs
         id: get_instances
@@ -66,9 +78,18 @@ jobs:
             exit 1
           fi
 
+          echo "Resolved Instances: $INSTANCE_IDS"
           echo "instance_ids=$INSTANCE_IDS" >> $GITHUB_OUTPUT
 
-      # ✅ Send SSM Command (Modified to use script file)
+      # ✅ Dry Run
+      - name: Dry Run
+        if: ${{ github.event.inputs.dry_run == 'true' }}
+        run: |
+          echo "🚦 DRY RUN ENABLED"
+          echo "Would execute on: ${{ steps.get_instances.outputs.instance_ids }}"
+          exit 0
+
+      # ✅ Send SSM Command
       - name: Send SSM Command
         id: send_command
         if: ${{ github.event.inputs.dry_run != 'true' }}
