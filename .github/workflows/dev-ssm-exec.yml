@@ -20,7 +20,7 @@ permissions:
   contents: read
 
 env:
-  AWS_REGION: us-east-1
+  AWS_REGION: us-west-1
 
 jobs:
   run-ssm:
