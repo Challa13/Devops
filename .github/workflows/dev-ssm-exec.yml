@@ -45,31 +45,20 @@ jobs:
 
       # 🔎 Validate DEV Instances Exist
       - name: Check DEV Instances
-        run: |
-          INSTANCES=$(aws ec2 describe-instances \
-            --filters "Name=tag:Environment,Values=dev" \
-            --query "Reservations[].Instances[].InstanceId" \
-            --output text)
-
-          if [ -z "$INSTANCES" ]; then
-            echo "No DEV instances found."
-            exit 1
-          fi
-
-          echo "Found DEV instances: $INSTANCES"
-
-      - name: Print SSM Output (Single Instance)
+        id: instances
         run: |
           INSTANCE=$(aws ec2 describe-instances \
             --filters "Name=tag:Environment,Values=dev" \
             --query "Reservations[0].Instances[0].InstanceId" \
             --output text)
 
-          aws ssm get-command-invocation \
-            --command-id $COMMAND_ID \
-            --instance-id $INSTANCE \
-            --query "StandardOutputContent" \
-            --output text
+          if [ -z "$INSTANCE" ] || [ "$INSTANCE" == "None" ]; then
+            echo "No DEV instances found."
+            exit 1
+          fi
+
+          echo "Found DEV instance: $INSTANCE"
+          echo "INSTANCE_ID=$INSTANCE" >> $GITHUB_ENV
 
       # 🚀 Execute Script via SSM (Output to S3)
       - name: Execute server_info.sh via SSM
@@ -90,10 +79,10 @@ jobs:
             --output text)
 
           echo "Command ID: $COMMAND_ID"
+          echo "COMMAND_ID=$COMMAND_ID" >> $GITHUB_ENV
 
           echo "Waiting for command completion..."
 
-          # SAFE polling (not instance-based)
           while true; do
             STATUS=$(aws ssm list-commands \
               --command-id $COMMAND_ID \
@@ -114,16 +103,19 @@ jobs:
 
           echo "Command execution completed successfully."
 
-      # 📦 Print S3 Output Location
+      # 🖨️ Print Script Output in GitHub Logs
+      - name: Print SSM Output
+        run: |
+          echo "Fetching output for Instance: $INSTANCE_ID"
+
+          aws ssm get-command-invocation \
+            --command-id $COMMAND_ID \
+            --instance-id $INSTANCE_ID \
+            --query "StandardOutputContent" \
+            --output text
+
+      # 📦 Show S3 Location
       - name: Print S3 Output Location
         run: |
           echo "SSM output stored in:"
           echo "s3://$S3_BUCKET/$S3_PREFIX/"
-      - name: List S3 Buckets
-        run: |
-          echo "Listing S3 Buckets..."
-          aws s3 ls
-
-      - name: Debug Identity
-        run: |
-          aws sts get-caller-identity
