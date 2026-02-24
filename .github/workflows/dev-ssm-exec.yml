@@ -106,3 +106,7 @@ jobs:
         run: |
           echo "SSM output stored in:"
           echo "s3://$S3_BUCKET/$S3_PREFIX/"
+      - name: List S3 Buckets
+        run: |
+          echo "Listing S3 Buckets..."
+          aws s3 ls
