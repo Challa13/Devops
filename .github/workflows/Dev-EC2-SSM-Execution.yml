@@ -38,7 +38,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::<ACCOUNT_ID>:role/github-oidc-dev-role
+          role-to-assume: arn:aws:iam::034362042633:role/github-role11
           aws-region: ap-south-1
 
       # ✅ Dev-only Guardrail
