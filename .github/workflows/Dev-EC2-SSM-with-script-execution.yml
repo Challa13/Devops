@@ -1,4 +1,4 @@
-name: Dev EC2 SSM Execution
+name: Dev EC2 Patch via SSM
 
 on:
   workflow_dispatch:
@@ -7,21 +7,21 @@ on:
         description: "Specific EC2 Instance ID (optional)"
         required: false
       tag_key:
-        description: "Tag key (default: Environment)"
+        description: "Tag key"
         required: false
         default: Environment
       tag_value:
-        description: "Tag value (default: dev)"
+        description: "Tag value"
         required: false
         default: dev
-      dry_run:
-        description: "Dry run (true/false)"
-        required: false
-        default: "true"
       script_args:
-        description: "Script arguments"
+        description: "Script arguments (--apply or --apply --restart-if-needed)"
         required: false
         default: ""
+      dry_run:
+        description: "Dry run"
+        required: false
+        default: "false"
 
   schedule:
     - cron: "0 2 * * *"
@@ -32,57 +32,63 @@ permissions:
 
 env:
   AWS_REGION: us-west-1
+  S3_BUCKET: dev-ssm-server-logs
 
 jobs:
-  ssm-run:
+  patch:
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
 
+      # 🔐 OIDC Authentication
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::034362042633:role/github-role11
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Validate Dev Target
+      # 🛑 Dev Guardrail
+      - name: Validate Dev Environment
         run: |
           TAG_VALUE="${{ github.event.inputs.tag_value || 'dev' }}"
           if [[ "$TAG_VALUE" != "dev" ]]; then
-            echo "❌ Only dev environment is allowed."
+            echo "❌ Only dev environment allowed."
             exit 1
           fi
 
-      - name: Get EC2 Instance IDs
-        id: get_instances
+      # 🔎 Get Instances
+      - name: Resolve Instances
+        id: instances
         run: |
           if [[ -n "${{ github.event.inputs.instance_id }}" ]]; then
-            INSTANCE_IDS="${{ github.event.inputs.instance_id }}"
+            IDS="${{ github.event.inputs.instance_id }}"
           else
-            INSTANCE_IDS=$(aws ec2 describe-instances \
+            IDS=$(aws ec2 describe-instances \
               --filters "Name=tag:${{ github.event.inputs.tag_key || 'Environment' }},Values=${{ github.event.inputs.tag_value || 'dev' }}" \
                         "Name=instance-state-name,Values=running" \
               --query "Reservations[].Instances[].InstanceId" \
               --output text)
           fi
 
-          if [[ -z "$INSTANCE_IDS" ]]; then
-            echo "❌ No running dev instances found"
+          if [[ -z "$IDS" ]]; then
+            echo "❌ No running instances found."
             exit 1
           fi
 
-          echo "instance_ids=$INSTANCE_IDS" >> $GITHUB_OUTPUT
+          echo "instance_ids=$IDS" >> $GITHUB_OUTPUT
+          echo "Instances: $IDS"
 
+      # 🚦 Dry Run
       - name: Dry Run
         if: ${{ github.event.inputs.dry_run == 'true' }}
         run: |
-          echo "🚦 DRY RUN ENABLED"
-          echo "Would execute on: ${{ steps.get_instances.outputs.instance_ids }}"
+          echo "DRY RUN MODE"
+          echo "Would patch instances: ${{ steps.instances.outputs.instance_ids }}"
           exit 0
 
-      # ✅ Properly create script on EC2
-      - name: Prepare Script for SSM
+      # 📦 Prepare SSM Script
+      - name: Prepare Script
         run: |
           SCRIPT_ARGS="${{ github.event.inputs.script_args || '' }}"
 
@@ -92,69 +98,76 @@ jobs:
             echo "EOF"
             echo "chmod +x /tmp/update_check.sh"
             echo "/tmp/update_check.sh ${SCRIPT_ARGS}"
-          } > run_update.sh
+          } > run.sh
 
-          jq -Rs '{commands: split("\n") | map(select(length > 0))}' run_update.sh > ssm-commands.json
+          jq -Rs '{commands: split("\n") | map(select(length > 0))}' run.sh > ssm.json
 
-      - name: Execute via SSM
-        id: send_command
+      # 🚀 Send SSM Command (Logs go directly to S3)
+      - name: Execute SSM Command
+        id: send
         run: |
+          DATE=$(date -u +%Y-%m-%d)
+          TIME=$(date -u +%H-%M-%S)
+          PREFIX="dev-patching/$DATE/$TIME"
+
           COMMAND_ID=$(aws ssm send-command \
             --document-name "AWS-RunShellScript" \
-            --instance-ids ${{ steps.get_instances.outputs.instance_ids }} \
-            --parameters file://ssm-commands.json \
+            --instance-ids ${{ steps.instances.outputs.instance_ids }} \
+            --parameters file://ssm.json \
+            --output-s3-bucket-name $S3_BUCKET \
+            --output-s3-key-prefix $PREFIX \
             --query "Command.CommandId" \
             --output text)
 
           echo "command_id=$COMMAND_ID" >> $GITHUB_OUTPUT
+          echo "prefix=$PREFIX" >> $GITHUB_OUTPUT
+          echo "Command ID: $COMMAND_ID"
 
-      # ✅ Better wait handling
-      - name: Wait for command completion
+      # ⏳ Wait for Completion
+      - name: Wait for SSM Completion
         run: |
-          FIRST_INSTANCE=$(echo "${{ steps.get_instances.outputs.instance_ids }}" | awk '{print $1}')
-
-          STATUS="InProgress"
-
-          while [[ "$STATUS" == "InProgress" || "$STATUS" == "Pending" ]]; do
-            sleep 5
-            STATUS=$(aws ssm get-command-invocation \
-              --command-id ${{ steps.send_command.outputs.command_id }} \
-              --instance-id $FIRST_INSTANCE \
-              --query "Status" \
-              --output text)
-            echo "Current Status: $STATUS"
-          done
-
-          if [[ "$STATUS" != "Success" ]]; then
-            echo "❌ Command failed with status: $STATUS"
-            aws ssm get-command-invocation \
-              --command-id ${{ steps.send_command.outputs.command_id }} \
-              --instance-id $FIRST_INSTANCE \
-              --query "{Status:Status,StatusDetails:StatusDetails,StandardErrorContent:StandardErrorContent}" \
-              --output json
-            exit 1
-          fi
-
-      - name: Fetch Output
-        run: |
-          mkdir -p ssm-logs
-          for INSTANCE in ${{ steps.get_instances.outputs.instance_ids }}
+          for INSTANCE in ${{ steps.instances.outputs.instance_ids }}
           do
-            aws ssm get-command-invocation \
-              --command-id ${{ steps.send_command.outputs.command_id }} \
-              --instance-id $INSTANCE \
-              --query "StandardOutputContent" \
-              --output text > ssm-logs/update_report_$INSTANCE.txt
+            echo "Waiting for $INSTANCE"
 
-            aws ssm get-command-invocation \
-              --command-id ${{ steps.send_command.outputs.command_id }} \
-              --instance-id $INSTANCE \
-              --query "StandardErrorContent" \
-              --output text > ssm-logs/update_report_$INSTANCE.err
+            STATUS="InProgress"
+
+            while [[ "$STATUS" == "Pending" || "$STATUS" == "InProgress" ]]; do
+              sleep 5
+              STATUS=$(aws ssm get-command-invocation \
+                --command-id ${{ steps.send.outputs.command_id }} \
+                --instance-id $INSTANCE \
+                --query "Status" \
+                --output text)
+              echo "$INSTANCE -> $STATUS"
+            done
+
+            if [[ "$STATUS" != "Success" ]]; then
+              echo "❌ $INSTANCE failed"
+              aws ssm get-command-invocation \
+                --command-id ${{ steps.send.outputs.command_id }} \
+                --instance-id $INSTANCE \
+                --output json
+              exit 1
+            fi
           done
 
-      - name: Upload logs
-        uses: actions/upload-artifact@v4
-        with:
-          name: ssm-logs
-          path: ssm-logs/*
+      # 🔁 Optional Reboot Handling
+      - name: Reboot If Requested
+        if: contains(github.event.inputs.script_args, '--restart-if-needed')
+        run: |
+          echo "Rebooting instances..."
+          aws ec2 reboot-instances \
+            --instance-ids ${{ steps.instances.outputs.instance_ids }}
+
+          echo "Waiting for instance status checks..."
+          aws ec2 wait instance-status-ok \
+            --instance-ids ${{ steps.instances.outputs.instance_ids }}
+
+          echo "Instances back online."
+
+      # 📁 Display S3 Log Location
+      - name: Show S3 Log Location
+        run: |
+          echo "Logs stored at:"
+          echo "s3://${{ env.S3_BUCKET }}/${{ steps.send.outputs.prefix }}/"
