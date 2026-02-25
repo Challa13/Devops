@@ -97,7 +97,6 @@ jobs:
             echo "bash update_check.sh ${SCRIPT_ARGS}"
           } > run_update.sh
 
-          # Build JSON payload for SSM
           jq -Rs '{commands: split("\n") | map(select(length > 0))}' run_update.sh > ssm-commands.json
 
           echo "✅ Prepared SSM command payload (SCRIPT_ARGS=${SCRIPT_ARGS})"
@@ -124,8 +123,8 @@ jobs:
             --command-id ${{ steps.send_command.outputs.command_id }} \
             --instance-id $FIRST_INSTANCE
 
-      # ✅ Fetch Output as TXT
-      - name: Fetch SSM Output as TXT
+      # ✅ Fetch Output (STDOUT + STDERR)
+      - name: Fetch SSM Output
         run: |
           mkdir -p ssm-logs
           for INSTANCE in ${{ steps.get_instances.outputs.instance_ids }}
@@ -135,6 +134,12 @@ jobs:
               --instance-id $INSTANCE \
               --query "StandardOutputContent" \
               --output text > ssm-logs/update_report_$INSTANCE.txt
+
+            aws ssm get-command-invocation \
+              --command-id ${{ steps.send_command.outputs.command_id }} \
+              --instance-id $INSTANCE \
+              --query "StandardErrorContent" \
+              --output text > ssm-logs/update_report_$INSTANCE.err
           done
 
       # ✅ Upload Logs
@@ -142,4 +147,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ssm-logs
-          path: ssm-logs/*.txt
+          path: ssm-logs/*
