@@ -2,14 +2,36 @@
 
 # Script: update_check.sh
 # Purpose: Check and apply Ubuntu updates with optional reboot
+# Also generates system info (CPU, memory, ports, hostname, OS version)
 
 REPORT_FILE="/tmp/update_report.txt"
 
 generate_report() {
-    echo "===== Ubuntu Update Report =====" > "$REPORT_FILE"
+    echo "===== Ubuntu Update & System Report =====" > "$REPORT_FILE"
     echo "Date: $(date)" >> "$REPORT_FILE"
     echo "" >> "$REPORT_FILE"
 
+    # Hostname & OS version
+    echo "Hostname: $(hostname)" >> "$REPORT_FILE"
+    echo "OS Version: $(lsb_release -d | cut -f2)" >> "$REPORT_FILE"
+    echo "" >> "$REPORT_FILE"
+
+    # CPU info
+    echo "CPU Info:" >> "$REPORT_FILE"
+    lscpu | grep -E 'Model name|Architecture|CPU\(s\)' >> "$REPORT_FILE"
+    echo "" >> "$REPORT_FILE"
+
+    # Memory info
+    echo "Memory Info:" >> "$REPORT_FILE"
+    free -h >> "$REPORT_FILE"
+    echo "" >> "$REPORT_FILE"
+
+    # Open ports
+    echo "Open Ports:" >> "$REPORT_FILE"
+    sudo ss -tuln >> "$REPORT_FILE"
+    echo "" >> "$REPORT_FILE"
+
+    # Updates
     echo "Updating package list..." >> "$REPORT_FILE"
     sudo apt update -qq >> "$REPORT_FILE" 2>&1
 
