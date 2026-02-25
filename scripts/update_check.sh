@@ -4,6 +4,8 @@
 # Purpose: Check and apply Ubuntu updates with optional reboot
 # Generates system info report (CPU, memory, ports, hostname, OS version)
 
+set -e
+
 REPORT_FILE="/tmp/update_report.txt"
 
 generate_report() {
@@ -11,29 +13,24 @@ generate_report() {
     echo "Date: $(date)" >> "$REPORT_FILE"
     echo "" >> "$REPORT_FILE"
 
-    # Hostname & OS version
     echo "Hostname: $(hostname)" >> "$REPORT_FILE"
     echo "OS Version: $(lsb_release -d | cut -f2)" >> "$REPORT_FILE"
     echo "" >> "$REPORT_FILE"
 
-    # CPU info
     echo "CPU Info:" >> "$REPORT_FILE"
     lscpu | grep -E 'Model name|Architecture|CPU\(s\)' >> "$REPORT_FILE"
     echo "" >> "$REPORT_FILE"
 
-    # Memory info
     echo "Memory Info:" >> "$REPORT_FILE"
     free -h >> "$REPORT_FILE"
     echo "" >> "$REPORT_FILE"
 
-    # Open ports
     echo "Open Ports:" >> "$REPORT_FILE"
-    sudo ss -tuln >> "$REPORT_FILE"
+    ss -tuln >> "$REPORT_FILE"
     echo "" >> "$REPORT_FILE"
 
-    # Updates
     echo "Updating package list..." >> "$REPORT_FILE"
-    sudo apt update -qq >> "$REPORT_FILE" 2>&1
+    apt update -qq >> "$REPORT_FILE" 2>&1
 
     echo "" >> "$REPORT_FILE"
     echo "Available upgrades:" >> "$REPORT_FILE"
@@ -53,21 +50,20 @@ generate_report() {
 
 apply_updates() {
     echo "Applying updates..."
-    sudo apt upgrade -y
-    sudo apt autoremove -y
+    apt upgrade -y
+    apt autoremove -y
     generate_report
 }
 
 restart_if_needed() {
     if [ -f /var/run/reboot-required ]; then
         echo "System requires reboot. Restarting now..."
-        sudo reboot
+        reboot
     else
         echo "No reboot required."
     fi
 }
 
-# Main logic
 if [[ "$1" == "--apply" ]]; then
     apply_updates
     if [[ "$2" == "--restart-if-needed" ]]; then
