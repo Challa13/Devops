@@ -86,7 +86,7 @@ jobs:
       - name: Prepare Script for SSM
         id: prepare_script
         run: |
-          SCRIPT_JSON=$(jq -Rs '{commands: split("\n")}' scripts/server_info.sh)
+          SCRIPT_JSON=$(jq -Rs '{commands: split("\n")}' scripts/update_check.sh)
           echo "$SCRIPT_JSON" > ssm-commands.json
           echo "Prepared SSM command payload"
 
@@ -131,3 +131,4 @@ jobs:
         with:
           name: ssm-logs
           path: ssm-logs/*.txt
+
