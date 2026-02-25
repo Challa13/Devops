@@ -93,12 +93,12 @@ jobs:
           SCRIPT_ARGS="${{ github.event.inputs.script_args || '' }}"
           {
             echo "#!/bin/bash"
-            echo "export SCRIPT_ARGS='${SCRIPT_ARGS}'"
-            cat scripts/update_check.sh
-          } > temp_script.sh
+            echo "chmod +x /tmp/update_check.sh"
+            echo "bash /tmp/update_check.sh ${SCRIPT_ARGS}"
+          } > run_update.sh
 
           # Build JSON payload for SSM
-          jq -Rs '{commands: split("\n") | map(select(length > 0))}' temp_script.sh > ssm-commands.json
+          jq -Rs '{commands: split("\n") | map(select(length > 0))}' run_update.sh > ssm-commands.json
 
           echo "✅ Prepared SSM command payload (SCRIPT_ARGS=${SCRIPT_ARGS})"
 
