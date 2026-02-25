@@ -68,20 +68,11 @@ restart_if_needed() {
 }
 
 # Main logic
-case "$1" in
-    "")
-        # No args → just generate report
-        generate_report
-        ;;
-    "--apply")
-        apply_updates
-        ;;
-    "--apply"*"--restart-if-needed")
-        apply_updates
+if [[ "$1" == "--apply" ]]; then
+    apply_updates
+    if [[ "$2" == "--restart-if-needed" ]]; then
         restart_if_needed
-        ;;
-    *)
-        echo "Usage: $0 [--apply] [--apply --restart-if-needed]"
-        exit 1
-        ;;
-esac
+    fi
+else
+    generate_report
+fi
