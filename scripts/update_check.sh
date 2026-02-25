@@ -1,70 +1,87 @@
 #!/bin/bash
 
-set -e
-
+set -o pipefail
 export DEBIAN_FRONTEND=noninteractive
 
 REPORT_FILE="/tmp/update_report.txt"
 
+log() {
+    echo "$1" | tee -a "$REPORT_FILE"
+}
+
 generate_report() {
+
     echo "===== Ubuntu Update & System Report =====" > "$REPORT_FILE"
-    echo "Date: $(date)" >> "$REPORT_FILE"
-    echo "" >> "$REPORT_FILE"
+    log "Date: $(date)"
+    log ""
 
-    echo "Hostname: $(hostname)" >> "$REPORT_FILE"
-    echo "OS Version: $(lsb_release -d | cut -f2)" >> "$REPORT_FILE"
-    echo "" >> "$REPORT_FILE"
+    log "Hostname: $(hostname)"
 
-    echo "CPU Info:" >> "$REPORT_FILE"
-    lscpu | grep -E 'Model name|Architecture|CPU\(s\)' >> "$REPORT_FILE"
-    echo "" >> "$REPORT_FILE"
-
-    echo "Memory Info:" >> "$REPORT_FILE"
-    free -h >> "$REPORT_FILE"
-    echo "" >> "$REPORT_FILE"
-
-    echo "Open Ports:" >> "$REPORT_FILE"
-    ss -tuln >> "$REPORT_FILE"
-    echo "" >> "$REPORT_FILE"
-
-    echo "Updating package list..." >> "$REPORT_FILE"
-    apt-get update -qq >> "$REPORT_FILE" 2>&1
-
-    echo "" >> "$REPORT_FILE"
-    echo "Available upgrades:" >> "$REPORT_FILE"
-    apt list --upgradable 2>/dev/null | grep -v "Listing..." >> "$REPORT_FILE"
-
-    echo "" >> "$REPORT_FILE"
-    if [ -f /var/run/reboot-required ]; then
-        echo "⚠️ Reboot is required after updates." >> "$REPORT_FILE"
+    if command -v lsb_release >/dev/null 2>&1; then
+        log "OS Version: $(lsb_release -d | cut -f2)"
     else
-        echo "✅ No reboot required." >> "$REPORT_FILE"
+        log "OS Version: $(cat /etc/os-release | grep PRETTY_NAME | cut -d= -f2)"
     fi
 
-    echo "" >> "$REPORT_FILE"
-    echo "Report generated at: $REPORT_FILE"
+    log ""
+    log "CPU Info:"
+    lscpu 2>/dev/null | grep -E 'Model name|Architecture|CPU\(s\)' >> "$REPORT_FILE" || true
+
+    log ""
+    log "Memory Info:"
+    free -h >> "$REPORT_FILE" 2>/dev/null || true
+
+    log ""
+    log "Open Ports:"
+    ss -tuln >> "$REPORT_FILE" 2>/dev/null || true
+
+    log ""
+    log "Updating package list..."
+    apt-get update -qq >> "$REPORT_FILE" 2>&1 || log "apt-get update failed"
+
+    log ""
+    log "Available upgrades:"
+    apt list --upgradable 2>/dev/null | grep -v "Listing..." >> "$REPORT_FILE" || true
+
+    log ""
+    if [ -f /var/run/reboot-required ]; then
+        log "⚠️ Reboot is required after updates."
+    else
+        log "✅ No reboot required."
+    fi
+
+    log ""
+    log "Report generated at: $REPORT_FILE"
     cat "$REPORT_FILE"
 }
 
 apply_updates() {
-    echo "Applying updates..."
 
-    apt-get update -qq
-    apt-get upgrade -y \
+    log "Applying updates..."
+
+    if ! apt-get update -qq; then
+        log "❌ apt-get update failed"
+        exit 1
+    fi
+
+    if ! apt-get upgrade -y \
         -o Dpkg::Options::="--force-confdef" \
-        -o Dpkg::Options::="--force-confold"
+        -o Dpkg::Options::="--force-confold"; then
+        log "❌ apt-get upgrade failed"
+        exit 1
+    fi
 
-    apt-get autoremove -y
+    apt-get autoremove -y || true
 
     generate_report
 }
 
 restart_if_needed() {
     if [ -f /var/run/reboot-required ]; then
-        echo "System requires reboot. Restarting now..."
+        log "System requires reboot."
         reboot
     else
-        echo "No reboot required."
+        log "No reboot required."
     fi
 }
 
