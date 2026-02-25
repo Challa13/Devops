@@ -1,10 +1,8 @@
 #!/bin/bash
 
-# Script: update_check.sh
-# Purpose: Check and apply Ubuntu updates with optional reboot
-# Generates system info report (CPU, memory, ports, hostname, OS version)
-
 set -e
+
+export DEBIAN_FRONTEND=noninteractive
 
 REPORT_FILE="/tmp/update_report.txt"
 
@@ -30,7 +28,7 @@ generate_report() {
     echo "" >> "$REPORT_FILE"
 
     echo "Updating package list..." >> "$REPORT_FILE"
-    apt update -qq >> "$REPORT_FILE" 2>&1
+    apt-get update -qq >> "$REPORT_FILE" 2>&1
 
     echo "" >> "$REPORT_FILE"
     echo "Available upgrades:" >> "$REPORT_FILE"
@@ -50,8 +48,14 @@ generate_report() {
 
 apply_updates() {
     echo "Applying updates..."
-    apt upgrade -y
-    apt autoremove -y
+
+    apt-get update -qq
+    apt-get upgrade -y \
+        -o Dpkg::Options::="--force-confdef" \
+        -o Dpkg::Options::="--force-confold"
+
+    apt-get autoremove -y
+
     generate_report
 }
 
