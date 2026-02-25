@@ -83,25 +83,27 @@ jobs:
         if: ${{ github.event.inputs.dry_run == 'true' }}
         run: |
           echo "🚦 DRY RUN ENABLED"
-          echo "Would execute scripts/server_info.sh on: ${{ steps.get_instances.outputs.instance_ids }}"
+          echo "Would execute scripts/update_check.sh on: ${{ steps.get_instances.outputs.instance_ids }}"
           echo "script args: ${{ github.event.inputs.script_args  || '(none)' }}"
           exit 0
 
       # ✅ Prepare Script for SSM
       - name: Prepare Script for SSM
-        id: prepare_script
         run: |
-         # SCRIPT_JSON=$(jq -Rs '{commands: split("\n")}' scripts/update_check.sh)
           SCRIPT_ARGS="${{ github.event.inputs.script_args || '' }}"
           {
+            echo "#!/bin/bash"
             echo "export SCRIPT_ARGS='${SCRIPT_ARGS}'"
             cat scripts/update_check.sh
-          } | jq -Rs 'split("\n") | map(select(length > 0)) | {commands: .}'
-         # echo "$SCRIPT_JSON" > ssm-commands.json
-          echo "Prepared SSM command payload (SCRIPT_ARGS=${SCRIPT_ARGS})"
+          } > temp_script.sh
+
+          # Build JSON payload for SSM
+          jq -Rs '{commands: split("\n") | map(select(length > 0))}' temp_script.sh > ssm-commands.json
+
+          echo "✅ Prepared SSM command payload (SCRIPT_ARGS=${SCRIPT_ARGS})"
 
       # ✅ Send Command
-      - name: Execute server_info.sh via SSM
+      - name: Execute update_check.sh via SSM
         id: send_command
         run: |
           COMMAND_ID=$(aws ssm send-command \
@@ -132,7 +134,7 @@ jobs:
               --command-id ${{ steps.send_command.outputs.command_id }} \
               --instance-id $INSTANCE \
               --query "StandardOutputContent" \
-              --output text > ssm-logs/server_info_$INSTANCE.txt
+              --output text > ssm-logs/update_report_$INSTANCE.txt
           done
 
       # ✅ Upload Logs
@@ -141,4 +143,3 @@ jobs:
         with:
           name: ssm-logs
           path: ssm-logs/*.txt
-
