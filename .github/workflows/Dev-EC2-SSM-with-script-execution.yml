@@ -83,7 +83,7 @@ jobs:
         if: ${{ github.event.inputs.dry_run == 'true' }}
         run: |
           echo "🚦 DRY RUN ENABLED"
-          echo "Would execute scripts/update_check.sh on: ${{ steps.get_instances.outputs.instance_ids }}"
+          echo "Would execute update_check.sh on: ${{ steps.get_instances.outputs.instance_ids }}"
           echo "script args: ${{ github.event.inputs.script_args  || '(none)' }}"
           exit 0
 
@@ -93,8 +93,8 @@ jobs:
           SCRIPT_ARGS="${{ github.event.inputs.script_args || '' }}"
           {
             echo "#!/bin/bash"
-            echo "chmod +x /tmp/update_check.sh"
-            echo "bash /tmp/update_check.sh ${SCRIPT_ARGS}"
+            cat scripts/update_check.sh
+            echo "bash update_check.sh ${SCRIPT_ARGS}"
           } > run_update.sh
 
           # Build JSON payload for SSM
