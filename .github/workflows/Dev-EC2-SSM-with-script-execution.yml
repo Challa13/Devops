@@ -18,6 +18,10 @@ on:
         description: "Dry run (true/false)"
         required: false
         default: "true"
+      script_args:
+        description: "Script arguments (eg.. --apply or --apply --restart-if-needed)"
+        required: false
+        default: ""
 
   schedule:
     - cron: "0 2 * * *"
@@ -80,15 +84,21 @@ jobs:
         run: |
           echo "🚦 DRY RUN ENABLED"
           echo "Would execute scripts/server_info.sh on: ${{ steps.get_instances.outputs.instance_ids }}"
+          echo "script args: ${{ github.event.inputs.script_args  || '(none)' }}"
           exit 0
 
       # ✅ Prepare Script for SSM
       - name: Prepare Script for SSM
         id: prepare_script
         run: |
-          SCRIPT_JSON=$(jq -Rs '{commands: split("\n")}' scripts/update_check.sh)
-          echo "$SCRIPT_JSON" > ssm-commands.json
-          echo "Prepared SSM command payload"
+         # SCRIPT_JSON=$(jq -Rs '{commands: split("\n")}' scripts/update_check.sh)
+          SCRIPT_ARGS="${{ github.event.inputs.script_args || '' }}"
+          {
+            echo "export SCRIPT_ARGS='${SCRIPT_ARGS}'"
+            cat scripts/update_check.sh
+          } | jq -Rs 'split("\n") | map(select(length > 0)) | {commands: .}'
+         # echo "$SCRIPT_JSON" > ssm-commands.json
+          echo "Prepared SSM command payload (SCRIPT_ARGS=${SCRIPT_ARGS})"
 
       # ✅ Send Command
       - name: Execute server_info.sh via SSM
