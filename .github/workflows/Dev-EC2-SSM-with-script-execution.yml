@@ -88,17 +88,17 @@ jobs:
           exit 0
 
       # ✅ Prepare Script for SSM
-      - name: Prepare Script for SSM
-        run: |
-          SCRIPT_ARGS="${{ github.event.inputs.script_args || '' }}"
-          {
-            echo "#!/bin/bash"
-            cat scripts/update_check.sh
-            echo "bash update_check.sh ${SCRIPT_ARGS}"
-          } > run_update.sh
+    - name: Prepare Script for SSM
+  run: |
+    SCRIPT_ARGS="${{ github.event.inputs.script_args || '' }}"
+    {
+      echo "#!/bin/bash"
+      cat scripts/update_check.sh
+      echo "update_check.sh ${SCRIPT_ARGS}"
+    } > run_update.sh
 
-          # Build JSON payload for SSM
-          jq -Rs '{commands: split("\n") | map(select(length > 0))}' run_update.sh > ssm-commands.json
+    jq -Rs '{commands: split("\n") | map(select(length > 0))}' run_update.sh > ssm-commands.json
+
 
           echo "✅ Prepared SSM command payload (SCRIPT_ARGS=${SCRIPT_ARGS})"
 
