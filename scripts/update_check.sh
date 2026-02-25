@@ -2,7 +2,7 @@
 
 # Script: update_check.sh
 # Purpose: Check and apply Ubuntu updates with optional reboot
-# Also generates system info (CPU, memory, ports, hostname, OS version)
+# Generates system info report (CPU, memory, ports, hostname, OS version)
 
 REPORT_FILE="/tmp/update_report.txt"
 
@@ -68,11 +68,20 @@ restart_if_needed() {
 }
 
 # Main logic
-if [[ "$1" == "--apply" ]]; then
-    apply_updates
-    if [[ "$2" == "--restart-if-needed" ]]; then
+case "$1" in
+    "")
+        # No args → just generate report
+        generate_report
+        ;;
+    "--apply")
+        apply_updates
+        ;;
+    "--apply"*"--restart-if-needed")
+        apply_updates
         restart_if_needed
-    fi
-else
-    generate_report
-fi
+        ;;
+    *)
+        echo "Usage: $0 [--apply] [--apply --restart-if-needed]"
+        exit 1
+        ;;
+esac
