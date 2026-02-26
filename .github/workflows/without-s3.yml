@@ -52,11 +52,11 @@ jobs:
 
           case "$ENV" in
             dev)
-              REGION="us-east-1"
+              REGION="us-west-1"
               SCRIPT="update_check.sh"
               ;;
             staging)
-              REGION="us-west-1"
+              REGION="us-east-1"
               SCRIPT="stagingupdate_check.sh"
               ;;
             testing)
