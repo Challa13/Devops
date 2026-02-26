@@ -46,7 +46,7 @@ permissions:
   contents: read
 
 env:
-  SCRIPTS_DIR: maintenance_ubuntu2204
+  SCRIPTS_DIR: scripts
 
 jobs:
   ssm-run:
