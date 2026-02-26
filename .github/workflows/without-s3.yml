@@ -42,9 +42,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # --------------------------------------------------
+      # ---------------------------------------------
       # Map Environment → Region + Script
-      # --------------------------------------------------
+      # ---------------------------------------------
       - name: Set Environment Config
         id: config
         run: |
@@ -76,21 +76,18 @@ jobs:
           echo "region=$REGION" >> $GITHUB_OUTPUT
           echo "script_name=$SCRIPT" >> $GITHUB_OUTPUT
 
-          echo "Selected Region: $REGION"
-          echo "Selected Script: $SCRIPT"
-
-      # --------------------------------------------------
-      # Configure AWS via OIDC
-      # --------------------------------------------------
+      # ---------------------------------------------
+      # Configure AWS
+      # ---------------------------------------------
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::034362042633:role/roleforssm
           aws-region: ${{ steps.config.outputs.region }}
 
-      # --------------------------------------------------
+      # ---------------------------------------------
       # Detect Instances
-      # --------------------------------------------------
+      # ---------------------------------------------
       - name: Detect Instances
         id: detect
         run: |
@@ -124,14 +121,11 @@ jobs:
             exit 1
           fi
 
-          echo "Detected Instances:"
-          echo "$INSTANCE_IDS"
-
           echo "instance_ids=$INSTANCE_IDS" >> $GITHUB_OUTPUT
 
-      # --------------------------------------------------
-      # Execute Script
-      # --------------------------------------------------
+      # ---------------------------------------------
+      # Execute Script via SSM (SEND CONTENT)
+      # ---------------------------------------------
       - name: Execute via SSM
         id: execute
         run: |
@@ -143,41 +137,39 @@ jobs:
           ENV="${{ github.event.inputs.script_set }}"
 
           mkdir -p ssm-logs
-          SUCCESS_COUNT=0
-          FAILURE_COUNT=0
-          FAILED_INSTANCES=""
+          > ssm-logs/status_report.txt
 
           run_instance () {
             INSTANCE=$1
+            echo "Running on $INSTANCE"
 
-            echo "Running $SCRIPT on $INSTANCE"
+            # Build SSM payload dynamically
+            {
+              echo "cat > /tmp/run.sh << 'EOF'"
+              cat scripts/$SCRIPT
+              echo "EOF"
+              echo "chmod +x /tmp/run.sh"
+              echo "/tmp/run.sh $SCRIPT_ARGS"
+            } > ssm_payload.sh
+
+            jq -Rs '{commands: split("\n") | map(select(length > 0))}' ssm_payload.sh > ssm.json
 
             COMMAND_ID=$(aws ssm send-command \
               --document-name "AWS-RunShellScript" \
               --instance-ids $INSTANCE \
-              --parameters commands="bash scripts/$SCRIPT $SCRIPT_ARGS" \
+              --parameters file://ssm.json \
               --query "Command.CommandId" \
               --output text)
 
             STATUS="InProgress"
-            MAX_WAIT=600
-            WAITED=0
-
             while [[ "$STATUS" == "InProgress" || "$STATUS" == "Pending" ]]
             do
               sleep 5
-              WAITED=$((WAITED+5))
-
               STATUS=$(aws ssm get-command-invocation \
                 --command-id $COMMAND_ID \
                 --instance-id $INSTANCE \
                 --query "Status" \
                 --output text 2>/dev/null || echo "Pending")
-
-              if [[ "$WAITED" -ge "$MAX_WAIT" ]]; then
-                STATUS="TimedOut"
-                break
-              fi
             done
 
             aws ssm get-command-invocation \
@@ -193,13 +185,6 @@ jobs:
               --output text > ssm-logs/${ENV}_${INSTANCE}.err || true
 
             echo "$INSTANCE:$STATUS" >> ssm-logs/status_report.txt
-
-            if [[ "$STATUS" == "Success" ]]; then
-              SUCCESS_COUNT=$((SUCCESS_COUNT+1))
-            else
-              FAILURE_COUNT=$((FAILURE_COUNT+1))
-              FAILED_INSTANCES="$FAILED_INSTANCES $INSTANCE"
-            fi
           }
 
           if [[ "$MODE" == "sequential" ]]; then
@@ -215,13 +200,17 @@ jobs:
             wait
           fi
 
-          echo "success_count=$SUCCESS_COUNT" >> $GITHUB_OUTPUT
-          echo "failure_count=$FAILURE_COUNT" >> $GITHUB_OUTPUT
-          echo "failed_instances=$FAILED_INSTANCES" >> $GITHUB_OUTPUT
+          SUCCESS=$(grep -c ":Success" ssm-logs/status_report.txt || true)
+          FAILED=$(grep -vc ":Success" ssm-logs/status_report.txt || true)
+          FAILED_LIST=$(grep -v ":Success" ssm-logs/status_report.txt | cut -d: -f1 || true)
 
-      # --------------------------------------------------
+          echo "success_count=$SUCCESS" >> $GITHUB_OUTPUT
+          echo "failure_count=$FAILED" >> $GITHUB_OUTPUT
+          echo "failed_instances=$FAILED_LIST" >> $GITHUB_OUTPUT
+
+      # ---------------------------------------------
       # Upload Logs
-      # --------------------------------------------------
+      # ---------------------------------------------
       - name: Upload Logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -230,9 +219,9 @@ jobs:
           path: ssm-logs/*
           retention-days: 7
 
-      # --------------------------------------------------
-      # Execution Summary
-      # --------------------------------------------------
+      # ---------------------------------------------
+      # Summary
+      # ---------------------------------------------
       - name: Execution Summary
         if: always()
         run: |
@@ -246,11 +235,10 @@ jobs:
 
           echo "| Instance ID | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|-------------|--------|" >> $GITHUB_STEP_SUMMARY
-
-          while IFS=: read INSTANCE STATUS
+          cat ssm-logs/status_report.txt | while IFS=: read INSTANCE STATUS
           do
             echo "| $INSTANCE | $STATUS |" >> $GITHUB_STEP_SUMMARY
-          done < ssm-logs/status_report.txt
+          done
 
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Successful:** ${{ steps.execute.outputs.success_count }}" >> $GITHUB_STEP_SUMMARY
@@ -265,6 +253,3 @@ jobs:
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "✅ All instances executed successfully." >> $GITHUB_STEP_SUMMARY
           fi
-
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "📦 Logs stored in GitHub Artifacts (retention: 7 days)" >> $GITHUB_STEP_SUMMARY
