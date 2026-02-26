@@ -77,7 +77,7 @@ jobs:
           echo "script_name=$SCRIPT" >> $GITHUB_OUTPUT
 
       # ---------------------------------------------
-      # Configure AWS
+      # Configure AWS (OIDC)
       # ---------------------------------------------
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -111,7 +111,6 @@ jobs:
                         "Name=instance-state-name,Values=running" \
               --query "Reservations[].Instances[].InstanceId" \
               --output text)
-
           else
             INSTANCE_IDS="$SELECTOR"
           fi
@@ -124,7 +123,7 @@ jobs:
           echo "instance_ids=$INSTANCE_IDS" >> $GITHUB_OUTPUT
 
       # ---------------------------------------------
-      # Execute Script via SSM (SEND CONTENT)
+      # Execute via SSM (PURE HEREDOC)
       # ---------------------------------------------
       - name: Execute via SSM
         id: execute
@@ -143,16 +142,15 @@ jobs:
             INSTANCE=$1
             echo "Running on $INSTANCE"
 
-            # Build SSM payload dynamically
             {
-              echo "cat > /tmp/run.sh << 'EOF'"
+              echo "bash << 'EOF'"
               cat scripts/$SCRIPT
+              echo ""
               echo "EOF"
-              echo "chmod +x /tmp/run.sh"
-              echo "/tmp/run.sh $SCRIPT_ARGS"
             } > ssm_payload.sh
 
-            jq -Rs '{commands: split("\n") | map(select(length > 0))}' ssm_payload.sh > ssm.json
+            jq -Rs '{commands: split("\n") | map(select(length > 0))}' \
+              ssm_payload.sh > ssm.json
 
             COMMAND_ID=$(aws ssm send-command \
               --document-name "AWS-RunShellScript" \
@@ -235,10 +233,10 @@ jobs:
 
           echo "| Instance ID | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|-------------|--------|" >> $GITHUB_STEP_SUMMARY
-          cat ssm-logs/status_report.txt | while IFS=: read INSTANCE STATUS
+          while IFS=: read INSTANCE STATUS
           do
             echo "| $INSTANCE | $STATUS |" >> $GITHUB_STEP_SUMMARY
-          done
+          done < ssm-logs/status_report.txt
 
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Successful:** ${{ steps.execute.outputs.success_count }}" >> $GITHUB_STEP_SUMMARY
