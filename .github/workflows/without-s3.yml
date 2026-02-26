@@ -1,229 +1,223 @@
-name: Multi-Environment SSM Execution
+name: Dev EC2 SSM Maintenance
 
 on:
   workflow_dispatch:
     inputs:
       script_set:
-        description: "Select Environment"
+        description: "Script set → targets dev / staging / test / audit instances by tag"
         required: true
+        default: "system_maintenance"
         type: choice
         options:
-          - dev
-          - staging
-          - testing
-          - audit
-
+          - system_maintenance
+          - staging_system_maintenance
+          - test_system_maintenance
+          - audit_system_maintenance
       instance_selector:
-        description: "Space-separated instance IDs OR tag:Key=Value (optional)"
+        description: "How to select instances"
         required: false
-
-      run_order:
-        description: "Execution Mode"
-        required: true
+        default: "tag"
         type: choice
         options:
-          - sequential
-          - parallel
-        default: sequential
-
+          - tag
+          - ids
+      instance_id:
+        description: "EC2 Instance ID(s), space-separated (when instance_selector=ids)"
+        required: false
+      tag_key:
+        description: "Tag key (when instance_selector=tag)"
+        required: false
+        default: "Environment"
+      dry_run:
+        description: "Dry run (no SSM execution)"
+        required: false
+        default: true
+        type: boolean
       script_args:
-        description: "Arguments to script"
+        description: "Optional script arguments (e.g. --apply)"
         required: false
         default: ""
+
+  schedule:
+    - cron: "0 2 * * *"
 
 permissions:
   id-token: write
   contents: read
+
+env:
+  SCRIPTS_DIR: maintenance_ubuntu2204
 
 jobs:
   ssm-run:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      # ---------------------------------------------
-      # Map Environment → Region + Script
-      # ---------------------------------------------
-      - name: Set Environment Config
-        id: config
+      - name: Resolve inputs
+        id: inputs
         run: |
-          ENV="${{ github.event.inputs.script_set }}"
-          case "$ENV" in
-            dev) REGION="us-west-1"; SCRIPT="update_check.sh";;
-            staging) REGION="us-east-1"; SCRIPT="stagingupdate_check.sh";;
-            testing) REGION="us-east-2"; SCRIPT="testingupdate_check.sh";;
-            audit) REGION="us-west-2"; SCRIPT="auditupdate_check.sh";;
-            *) echo "Invalid environment"; exit 1;;
-          esac
-          echo "region=$REGION" >> $GITHUB_OUTPUT
-          echo "script_name=$SCRIPT" >> $GITHUB_OUTPUT
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            SCRIPT_SET="system_maintenance"
+            TAG_VALUE="dev"
+            echo "dry_run=false" >> $GITHUB_OUTPUT
+          else
+            SCRIPT_SET="${{ github.event.inputs.script_set || 'system_maintenance' }}"
+            case "$SCRIPT_SET" in
+              system_maintenance)           TAG_VALUE="dev" ;;
+              staging_system_maintenance)   TAG_VALUE="staging" ;;
+              test_system_maintenance)      TAG_VALUE="test" ;;
+              audit_system_maintenance)    TAG_VALUE="audit" ;;
+              *) TAG_VALUE="dev" ;;
+            esac
+            echo "dry_run=${{ github.event.inputs.dry_run }}" >> $GITHUB_OUTPUT
+          fi
+          echo "script_set=$SCRIPT_SET" >> $GITHUB_OUTPUT
+          echo "instance_selector=${{ github.event.inputs.instance_selector || 'tag' }}" >> $GITHUB_OUTPUT
+          echo "tag_key=${{ github.event.inputs.tag_key || 'Environment' }}" >> $GITHUB_OUTPUT
+          echo "tag_value=$TAG_VALUE" >> $GITHUB_OUTPUT
+          # Resolve region from secret JSON map (e.g. {"dev":"us-east-1","test":"us-west-1"})
+          AWS_REGIONS='${{ secrets.AWS_REGIONS }}'
+          AWS_REGION=$(echo "$AWS_REGIONS" | jq -r --arg env "$TAG_VALUE" 'if . == null or . == "" then "us-east-1" else (.[$env] // .dev // "us-east-1") end' 2>/dev/null || echo "us-east-1")
+          echo "aws_region=$AWS_REGION" >> $GITHUB_OUTPUT
+          echo "script_args=${{ github.event.inputs.script_args || '' }}" >> $GITHUB_OUTPUT
 
-      # ---------------------------------------------
-      # Configure AWS via OIDC
-      # ---------------------------------------------
-      - name: Configure AWS Credentials
+      - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::034362042633:role/roleforssm
-          aws-region: ${{ steps.config.outputs.region }}
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ steps.inputs.outputs.aws_region }}
 
-      # ---------------------------------------------
-      # Detect Instances
-      # ---------------------------------------------
-      - name: Detect Instances
-        id: detect
+      - name: Dev guardrail (dev-only when using tag)
         run: |
-          ENV="${{ github.event.inputs.script_set }}"
-          SELECTOR="${{ github.event.inputs.instance_selector }}"
+          SEL="${{ steps.inputs.outputs.instance_selector }}"
+          TAG_VAL="${{ steps.inputs.outputs.tag_value }}"
+          if [[ "$SEL" == "tag" && "$TAG_VAL" != "dev" ]]; then
+            echo "::error::Dev-only guardrail: tag_value must be 'dev' when instance_selector=tag. Got: $TAG_VAL"
+            exit 1
+          fi
+          if [[ "$SEL" == "ids" ]]; then
+            echo "Instance IDs provided; ensure they are dev instances only."
+          fi
+          echo "Dev guardrail passed."
 
-          if [[ -z "$SELECTOR" ]]; then
-            INSTANCE_IDS=$(aws ec2 describe-instances \
-              --filters "Name=tag:Environment,Values=$ENV" \
-                        "Name=instance-state-name,Values=running" \
-              --query "Reservations[].Instances[].InstanceId" \
-              --output text)
-          elif [[ "$SELECTOR" == tag:* ]]; then
-            TAG_PAIR="${SELECTOR#tag:}"
-            KEY="${TAG_PAIR%%=*}"
-            VALUE="${TAG_PAIR##*=}"
+      - name: Validate (script + env)
+        run: |
+          SCRIPT_PATH="${{ env.SCRIPTS_DIR }}/${{ steps.inputs.outputs.script_set }}.sh"
+          [[ -f "$SCRIPT_PATH" ]] || { echo "::error::Script not found: $SCRIPT_PATH"; exit 1; }
+          echo "Script: ${{ steps.inputs.outputs.script_set }} → Environment: ${{ steps.inputs.outputs.tag_value }} | Region: ${{ steps.inputs.outputs.aws_region }}"
 
-            INSTANCE_IDS=$(aws ec2 describe-instances \
-              --filters "Name=tag:$KEY,Values=$VALUE" \
-                        "Name=instance-state-name,Values=running" \
-              --query "Reservations[].Instances[].InstanceId" \
-              --output text)
+      - name: Get EC2 Instance IDs
+        id: get_instances
+        run: |
+          SELECTOR="${{ steps.inputs.outputs.instance_selector }}"
+          if [[ "$SELECTOR" == "ids" && -n "${{ github.event.inputs.instance_id }}" ]]; then
+            INSTANCE_IDS="${{ github.event.inputs.instance_id }}"
           else
-            INSTANCE_IDS="$SELECTOR"
+            TAG_KEY="${{ steps.inputs.outputs.tag_key }}"
+            TAG_VALUE="${{ steps.inputs.outputs.tag_value }}"
+            INSTANCE_IDS=$(aws ec2 describe-instances \
+              --filters "Name=tag:${TAG_KEY},Values=${TAG_VALUE}" \
+                        "Name=instance-state-name,Values=running" \
+              --query "Reservations[].Instances[].InstanceId" \
+              --output text | tr '\t' ' ')
           fi
 
-          # Normalize spaces
-          INSTANCE_IDS=$(echo "$INSTANCE_IDS" | tr '\t' ' ')
-
           if [[ -z "$INSTANCE_IDS" ]]; then
-            echo "No running instances found."
+            echo "::error::No running instances found for ${{ steps.inputs.outputs.tag_key }}=${{ steps.inputs.outputs.tag_value }} in region ${{ steps.inputs.outputs.aws_region }}"
             exit 1
           fi
 
-          echo "Detected Instances: $INSTANCE_IDS"
-          echo "instance_ids=$INSTANCE_IDS" >> $GITHUB_OUTPUT
+          echo "Found instances: $INSTANCE_IDS"
+          echo "instance_ids<<EOF" >> $GITHUB_OUTPUT
+          echo "$INSTANCE_IDS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
-      # ---------------------------------------------
-      # Execute via SSM (Pure Heredoc)
-      # ---------------------------------------------
-      - name: Execute via SSM
-        id: execute
+      - name: Dry Run
+        if: steps.inputs.outputs.dry_run == 'true'
         run: |
-          set -euo pipefail
+          echo "DRY RUN — no SSM execution."
+          echo "script_set=${{ steps.inputs.outputs.script_set }}, instances=${{ steps.get_instances.outputs.instance_ids }}, args=${{ steps.inputs.outputs.script_args }}"
 
-          MODE="${{ github.event.inputs.run_order }}"
-          SCRIPT="${{ steps.config.outputs.script_name }}"
-          SCRIPT_ARGS="${{ github.event.inputs.script_args }}"
-          ENV="${{ github.event.inputs.script_set }}"
+      # Single command so heredoc + chmod + script run in one shell (SSM runs each array element separately)
+      - name: Prepare SSM script (single command)
+        if: steps.inputs.outputs.dry_run != 'true'
+        run: |
+          SCRIPT_PATH="${{ env.SCRIPTS_DIR }}/${{ steps.inputs.outputs.script_set }}.sh"
+          SCRIPT_ARGS="${{ steps.inputs.outputs.script_args }}"
+          {
+            echo "cat > /tmp/maintenance_script.sh << 'SCRIPTEOF'"
+            cat "$SCRIPT_PATH"
+            echo "SCRIPTEOF"
+            echo "chmod +x /tmp/maintenance_script.sh"
+            echo "/tmp/maintenance_script.sh ${SCRIPT_ARGS}"
+          } > run_script.sh
+          # One command = entire script; SSM would run each line separately if we split by newline
+          jq -Rs '{commands: [.]}' run_script.sh > ssm-commands.json
 
+      - name: Run SSM (sequential)
+        id: run_ssm
+        if: steps.inputs.outputs.dry_run != 'true'
+        run: |
           mkdir -p ssm-logs
-          > ssm-logs/status_report.txt
-
-          run_instance() {
-            INSTANCE=$1
-            echo "Running $SCRIPT on $INSTANCE with args: $SCRIPT_ARGS"
-
+          SUCCESS_COUNT=0
+          FAILURE_COUNT=0
+          FAILED_INSTANCES=""
+          for INSTANCE in ${{ steps.get_instances.outputs.instance_ids }}; do
+            echo "Running on $INSTANCE ..."
             COMMAND_ID=$(aws ssm send-command \
               --document-name "AWS-RunShellScript" \
               --instance-ids "$INSTANCE" \
-              --parameters commands="$(cat <<'EOF'
-#!/bin/bash
-'"$(cat scripts/$SCRIPT)"'
-'"$SCRIPT_ARGS"'
-EOF
-)" \
-              --query "Command.CommandId" \
-              --output text)
-
+              --parameters file://ssm-commands.json \
+              --query "Command.CommandId" --output text)
             STATUS="InProgress"
             while [[ "$STATUS" == "InProgress" || "$STATUS" == "Pending" ]]; do
               sleep 5
-              STATUS=$(aws ssm get-command-invocation \
-                --command-id "$COMMAND_ID" \
-                --instance-id "$INSTANCE" \
-                --query "Status" \
-                --output text 2>/dev/null || echo "Pending")
+              STATUS=$(aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id "$INSTANCE" --query "Status" --output text 2>/dev/null || echo "Pending")
+              echo "  $INSTANCE → $STATUS"
             done
-
-            aws ssm get-command-invocation \
-              --command-id "$COMMAND_ID" \
-              --instance-id "$INSTANCE" \
-              --query "StandardOutputContent" \
-              --output text > "ssm-logs/${ENV}_${INSTANCE}.out" || true
-            aws ssm get-command-invocation \
-              --command-id "$COMMAND_ID" \
-              --instance-id "$INSTANCE" \
-              --query "StandardErrorContent" \
-              --output text > "ssm-logs/${ENV}_${INSTANCE}.err" || true
-
-            echo "$INSTANCE:$STATUS" >> ssm-logs/status_report.txt
-          }
-
-          if [[ "$MODE" == "sequential" ]]; then
-            for INSTANCE in ${{ steps.detect.outputs.instance_ids }}; do
-              run_instance "$INSTANCE"
-            done
-          else
-            for INSTANCE in ${{ steps.detect.outputs.instance_ids }}; do
-              run_instance "$INSTANCE" &
-            done
-            wait
+            if [[ "$STATUS" == "Success" ]]; then
+              SUCCESS_COUNT=$((SUCCESS_COUNT+1))
+            else
+              FAILURE_COUNT=$((FAILURE_COUNT+1))
+              FAILED_INSTANCES="$FAILED_INSTANCES $INSTANCE"
+            fi
+            aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id "$INSTANCE" --output json > /tmp/out.json
+            jq -r '.StandardOutputContent // empty' /tmp/out.json > ssm-logs/maintenance_"$INSTANCE".txt
+            jq -r '.StandardErrorContent // empty' /tmp/out.json >> ssm-logs/maintenance_"$INSTANCE".err
+          done
+          echo "success_count=$SUCCESS_COUNT" >> $GITHUB_OUTPUT
+          echo "failure_count=$FAILURE_COUNT" >> $GITHUB_OUTPUT
+          echo "failed_instances<<EOF" >> $GITHUB_OUTPUT
+          echo "$FAILED_INSTANCES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          if [[ "$FAILURE_COUNT" -gt 0 ]]; then
+            echo "::error::One or more instances failed: $FAILED_INSTANCES"
+            exit 1
           fi
 
-          SUCCESS=$(grep -c ":Success" ssm-logs/status_report.txt || true)
-          FAILED=$(grep -vc ":Success" ssm-logs/status_report.txt || true)
-          FAILED_LIST=$(grep -v ":Success" ssm-logs/status_report.txt | cut -d: -f1 || true)
-
-          # Quote failed instances to prevent GitHub output error
-          echo "success_count=$SUCCESS" >> $GITHUB_OUTPUT
-          echo "failure_count=$FAILED" >> $GITHUB_OUTPUT
-          echo "failed_instances=\"$FAILED_LIST\"" >> $GITHUB_OUTPUT
-
-      # ---------------------------------------------
-      # Upload logs
-      # ---------------------------------------------
-      - name: Upload Logs
-        if: always()
+      - name: Upload logs
+        if: always() && (steps.run_ssm.outputs.success_count != '' || steps.run_ssm.outputs.failure_count != '')
         uses: actions/upload-artifact@v4
         with:
-          name: ssm-logs-${{ github.event.inputs.script_set }}-${{ github.run_id }}
-          path: ssm-logs/*
+          name: ssm-logs-${{ github.run_id }}
+          path: ssm-logs/
           retention-days: 7
+          if-no-files-found: ignore
 
-      # ---------------------------------------------
-      # Execution Summary
-      # ---------------------------------------------
-      - name: Execution Summary
+      - name: Summary
         if: always()
         run: |
-          echo "## 🚀 SSM Execution Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Environment:** ${{ github.event.inputs.script_set }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Region:** ${{ steps.config.outputs.region }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Script:** ${{ steps.config.outputs.script_name }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Mode:** ${{ github.event.inputs.run_order }}" >> $GITHUB_STEP_SUMMARY
-          echo ""
-          echo "| Instance ID | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|-------------|--------|" >> $GITHUB_STEP_SUMMARY
-
-          while IFS=: read INSTANCE STATUS; do
-            echo "| $INSTANCE | $STATUS |" >> $GITHUB_STEP_SUMMARY
-          done < ssm-logs/status_report.txt
-
-          echo ""
-          echo "**Successful:** ${{ steps.execute.outputs.success_count }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Failed:** ${{ steps.execute.outputs.failure_count }}" >> $GITHUB_STEP_SUMMARY
-
-          if [[ "${{ steps.execute.outputs.failure_count }}" -gt 0 ]]; then
-            echo ""
-            echo "❌ Failed Instances:" >> $GITHUB_STEP_SUMMARY
-            echo "${{ steps.execute.outputs.failed_instances }}" >> $GITHUB_STEP_SUMMARY
-            exit 1
-          else
-            echo ""
-            echo "✅ All instances executed successfully." >> $GITHUB_STEP_SUMMARY
+          {
+            echo "## SSM Maintenance Summary"
+            echo "**Region:** ${{ steps.inputs.outputs.aws_region }} | **Script:** ${{ steps.inputs.outputs.script_set }} | **Instances:** ${{ steps.get_instances.outputs.instance_ids }}"
+            if [[ "${{ steps.inputs.outputs.dry_run }}" == "true" ]]; then
+              echo "Dry run — no SSM execution."
+            else
+              echo "**OK:** ${{ steps.run_ssm.outputs.success_count }} | **Failed:** ${{ steps.run_ssm.outputs.failure_count }}"
+              [[ -n "${{ steps.run_ssm.outputs.failed_instances }}" ]] && echo "Failed: ${{ steps.run_ssm.outputs.failed_instances }}"
+            fi
+            echo "Logs: Artifacts (7d retention)"
+          } >> $GITHUB_STEP_SUMMARY
