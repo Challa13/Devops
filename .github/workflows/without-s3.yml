@@ -100,7 +100,6 @@ jobs:
                         "Name=instance-state-name,Values=running" \
               --query "Reservations[].Instances[].InstanceId" \
               --output text)
-
           elif [[ "$SELECTOR" == tag:* ]]; then
             TAG_PAIR="${SELECTOR#tag:}"
             KEY="${TAG_PAIR%%=*}"
@@ -114,6 +113,9 @@ jobs:
           else
             INSTANCE_IDS="$SELECTOR"
           fi
+
+          # Normalize spaces (convert tabs → spaces)
+          INSTANCE_IDS=$(echo $INSTANCE_IDS | tr '\t' ' ')
 
           if [[ -z "$INSTANCE_IDS" ]]; then
             echo "No running instances found."
@@ -143,19 +145,16 @@ jobs:
             INSTANCE=$1
             echo "Running on $INSTANCE with args: $SCRIPT_ARGS"
 
-            # Create payload with heredoc + arguments
+            # Build SSM command JSON with heredoc
             {
               echo "bash << EOF"
               cat scripts/$SCRIPT
               echo ""
               echo "$SCRIPT_ARGS"
               echo "EOF"
-            } > ssm_payload.sh
+            } | jq -Rs '{commands: split("\n") | map(select(length > 0))}' > ssm.json
 
-            # Convert to JSON for SSM
-            jq -Rs '{commands: split("\n") | map(select(length > 0))}' ssm_payload.sh > ssm.json
-
-            # Send command via SSM
+            # Send SSM command
             COMMAND_ID=$(aws ssm send-command \
               --document-name "AWS-RunShellScript" \
               --instance-ids $INSTANCE \
@@ -163,7 +162,7 @@ jobs:
               --query "Command.CommandId" \
               --output text)
 
-            # Wait for command completion
+            # Wait for completion
             STATUS="InProgress"
             while [[ "$STATUS" == "InProgress" || "$STATUS" == "Pending" ]]; do
               sleep 5
@@ -190,7 +189,7 @@ jobs:
             echo "$INSTANCE:$STATUS" >> ssm-logs/status_report.txt
           }
 
-          # Run instances sequentially or in parallel
+          # Sequential or parallel execution
           if [[ "$MODE" == "sequential" ]]; then
             for INSTANCE in ${{ steps.detect.outputs.instance_ids }}; do
               run_instance $INSTANCE
