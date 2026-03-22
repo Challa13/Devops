@@ -19,8 +19,8 @@ on:
         required: false
         default: "true"
 
-  schedule:
-    - cron: "0 2 * * *"
+#  schedule:
+#    - cron: "0 2 * * *"
 
 permissions:
   id-token: write
