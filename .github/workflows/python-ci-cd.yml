@@ -1,0 +1,139 @@
+# ===================================================================
+# WORKFLOW 2 : PYTHON DJANGO / FLASK PIPELINE
+# File Name: .github/workflows/python-ci-cd.yml
+# ===================================================================
+
+name: Python CI-CD Pipeline
+
+# Trigger manually or push to main branch
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+# Global variables
+env:
+  APP_NAME: python-app
+  IMAGE_TAG: ${{ github.run_number }}
+  REGISTRY: yourcompany.jfrog.io
+  REPO: docker-local
+  NAMESPACE: dev
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+
+    # ---------------------------------------------------------------
+    # STEP 1 - Clone repository code
+    # ---------------------------------------------------------------
+    - name: Checkout Source Code
+      uses: actions/checkout@v4
+
+    # ---------------------------------------------------------------
+    # STEP 2 - Install Python runtime
+    # ---------------------------------------------------------------
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: 3.11
+
+    # ---------------------------------------------------------------
+    # STEP 3 - Validate project files
+    # Check requirements.txt exists
+    # ---------------------------------------------------------------
+    - name: Validate Code
+      run: |
+        ls -la
+        test -f requirements.txt || echo "requirements.txt missing"
+
+    # ---------------------------------------------------------------
+    # STEP 4 - Install project dependencies
+    # ---------------------------------------------------------------
+    - name: Install Dependencies
+      run: pip install -r requirements.txt
+
+    # ---------------------------------------------------------------
+    # STEP 5 - Static code quality scan using flake8
+    # Does linting for Python syntax/style
+    # ---------------------------------------------------------------
+    - name: Lint Python Code
+      run: |
+        pip install flake8
+        flake8 . || true
+
+    # ---------------------------------------------------------------
+    # STEP 6 - Django application validation
+    # Runs only if manage.py exists
+    # ---------------------------------------------------------------
+    - name: Django Health Check
+      run: |
+        if [ -f manage.py ]; then
+          python manage.py check
+        fi
+
+    # ---------------------------------------------------------------
+    # STEP 7 - Python package vulnerability scan
+    # safety checks insecure dependencies
+    # ---------------------------------------------------------------
+    - name: Dependency Security Scan
+      run: |
+        pip install safety
+        safety check || true
+
+    # ---------------------------------------------------------------
+    # STEP 8 - Install Trivy scanner
+    # ---------------------------------------------------------------
+    - name: Install Trivy
+      run: |
+        sudo apt-get update
+        sudo apt-get install wget -y
+        wget https://github.com/aquasecurity/trivy/releases/latest/download/trivy_0.50.1_Linux-64bit.deb
+        sudo dpkg -i trivy_0.50.1_Linux-64bit.deb
+
+    # ---------------------------------------------------------------
+    # STEP 9 - Build Docker image
+    # ---------------------------------------------------------------
+    - name: Build Docker Image
+      run: |
+        docker build -t $REGISTRY/$REPO/$APP_NAME:$IMAGE_TAG .
+
+    # ---------------------------------------------------------------
+    # STEP 10 - Scan Docker image
+    # ---------------------------------------------------------------
+    - name: Scan Docker Image
+      run: |
+        trivy image $REGISTRY/$REPO/$APP_NAME:$IMAGE_TAG
+
+    # ---------------------------------------------------------------
+    # STEP 11 - Login to Artifactory
+    # ---------------------------------------------------------------
+    - name: Login to Artifactory
+      run: |
+        echo "${{ secrets.ART_PASS }}" | docker login $REGISTRY \
+        -u "${{ secrets.ART_USER }}" --password-stdin
+
+    # ---------------------------------------------------------------
+    # STEP 12 - Push image to registry
+    # ---------------------------------------------------------------
+    - name: Push Docker Image
+      run: |
+        docker push $REGISTRY/$REPO/$APP_NAME:$IMAGE_TAG
+
+    # ---------------------------------------------------------------
+    # STEP 13 - Install kubectl
+    # ---------------------------------------------------------------
+    - name: Setup kubectl
+      uses: azure/setup-kubectl@v4
+
+    # ---------------------------------------------------------------
+    # STEP 14 - Deploy to Kubernetes cluster
+    # ---------------------------------------------------------------
+    - name: Deploy to Kubernetes
+      run: |
+        mkdir -p ~/.kube
+        echo "${{ secrets.KUBECONFIG }}" > ~/.kube/config
+        kubectl set image deployment/$APP_NAME \
+        $APP_NAME=$REGISTRY/$REPO/$APP_NAME:$IMAGE_TAG -n $NAMESPACE
+        kubectl rollout status deployment/$APP_NAME -n $NAMESPACE
